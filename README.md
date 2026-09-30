@@ -55,11 +55,16 @@ to a monospace font.
 | Pause / resume | P or Esc (also pauses automatically when the tab loses focus) |
 | All sound on / off | M (or click SOUND in the footer) |
 | Music on / off | B (or click MUSIC in the footer) |
-| Start / continue | Enter |
+| Start / continue | Enter (main or numpad), or click / tap anywhere |
 | Choose start level (title screen) | ← → (0–19) |
 
-Sound starts after your first keypress, because browsers block audio until the
-page gets a user gesture.
+Sound starts after your first keypress or click, because browsers block audio
+until the page gets a user gesture. If the browser refuses audio entirely, the
+game still plays, just silently.
+
+**Keys do nothing?** The page probably doesn't have keyboard focus (for example
+the address bar or another window does). Click anywhere on the game: that
+focuses it and starts the game.
 
 ## Testing
 

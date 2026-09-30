@@ -286,3 +286,122 @@ test('B is the music toggle: a press edge, separate from M', () => {
   assert.deepEqual([a.music, a.mute], [true, false]);
   assert.equal(input.poll().music, false, 'edge only');
 });
+
+// ===========================================================================
+// Starting from the title screen: robust keys and click / tap
+// ===========================================================================
+
+function recordingTarget() {
+  const listeners = {};
+  const options = {};
+  return {
+    options,
+    addEventListener(type, fn, opts) { (listeners[type] ??= new Set()).add(fn); options[type] = opts; },
+    removeEventListener(type, fn, opts) { if (JSON.stringify(opts) === JSON.stringify(options[type])) listeners[type]?.delete(fn); },
+    emit(type, event = {}) { for (const fn of listeners[type] ?? []) fn(event); },
+    count(type) { return listeners[type]?.size ?? 0; },
+  };
+}
+
+function keyEventWith(fields) {
+  return { code: '', key: '', repeat: false, isComposing: false, keyCode: 0, defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; }, ...fields };
+}
+
+test('Numpad Enter starts the game too', () => {
+  const { input, down } = setup();
+  down('NumpadEnter');
+  assert.equal(input.poll().start, true);
+});
+
+test('fallback by key: an event with an empty code still works (remote desktops, virtual keyboards)', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  const enter = keyEventWith({ key: 'Enter' });
+  target.emit('keydown', enter);
+  assert.equal(enter.defaultPrevented, true, 'the browser does not get the key either');
+  assert.equal(input.poll().start, true);
+
+  target.emit('keydown', keyEventWith({ key: ' ' }));
+  assert.equal(input.poll().hardDrop, true);
+  target.emit('keydown', keyEventWith({ key: 'ArrowLeft' }));
+  assert.equal(input.poll().shift, -1);
+  target.emit('keyup', keyEventWith({ key: 'ArrowLeft' }));
+  assert.equal(input.poll().shift, 0, 'released by the same fallback id');
+});
+
+test('fallback never re-maps letter keys: layouts stay physical', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  const q = keyEventWith({ code: 'KeyQ', key: 'a' });      // AZERTY: physical Q types 'a'
+  target.emit('keydown', q);
+  assert.equal(q.defaultPrevented, false);
+  assert.deepEqual({ ...input.poll() }, emptyActions());
+});
+
+test('a code binding wins over the key fallback (no double press)', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  target.emit('keydown', keyEventWith({ code: 'Enter', key: 'Enter' }));
+  target.emit('keydown', keyEventWith({ code: '', key: 'Enter' }));   // same key seen again without a code
+  assert.equal(input.poll().start, true);
+  assert.equal(input.poll().start, false);
+});
+
+test('IME composition: Enter that commits text is not a game key', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  for (const e of [keyEventWith({ code: 'Enter', key: 'Enter', isComposing: true }), keyEventWith({ code: 'Enter', key: 'Process', keyCode: 229 })]) {
+    target.emit('keydown', e);
+    assert.equal(e.defaultPrevented, false);
+  }
+  assert.equal(input.poll().start, false);
+});
+
+test('key listeners: capture phase, never passive; destroy removes them with the same options', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  assert.deepEqual(target.options.keydown, { capture: true, passive: false });
+  assert.deepEqual(target.options.keyup, { capture: true, passive: false });
+  input.destroy();
+  for (const type of ['keydown', 'keyup', 'blur', 'pointerdown']) assert.equal(target.count(type), 0, type);
+});
+
+const pointer = (fields = {}) => ({ isPrimary: true, pointerType: 'mouse', button: 0, target: { closest: () => null }, ...fields });
+
+test('click / tap anywhere presses Start (e.g. the page has no keyboard focus)', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  target.emit('pointerdown', pointer());
+  assert.equal(input.poll().start, true, 'mouse left button');
+  assert.equal(input.poll().start, false, 'an edge, not held');
+  target.emit('pointerdown', pointer({ pointerType: 'touch', button: -1 }));
+  assert.equal(input.poll().start, true, 'touch');
+  target.emit('pointerdown', pointer({ pointerType: 'pen' }));
+  assert.equal(input.poll().start, true, 'pen');
+});
+
+test('clicks that are not "start": right button, secondary pointers, buttons and links', () => {
+  const target = recordingTarget();
+  const input = createInput(target);
+  target.emit('pointerdown', pointer({ button: 2 }));
+  target.emit('pointerdown', pointer({ isPrimary: false }));
+  target.emit('pointerdown', pointer({ target: { closest: (sel) => (sel.includes('button') ? {} : null) } }));
+  assert.equal(input.poll().start, false);
+});
+
+test('pointerStart: false disables click-to-start', () => {
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { pointerStart: false });
+  assert.equal(target.count('pointerdown'), 0);
+  assert.equal(input.poll().start, false);
+});
+
+test('press(): programmatic press edges; unknown actions ignored', () => {
+  const { input } = setup();
+  input.press('start');
+  input.press('explode');
+  const a = input.poll();
+  assert.equal(a.start, true);
+  assert.equal(input.poll().start, false);
+});

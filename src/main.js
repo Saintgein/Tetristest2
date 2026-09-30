@@ -57,9 +57,12 @@ applyMotionClass();
 motionQuery?.addEventListener?.('change', applyMotionClass);
 
 const audio = createAudio();
-// Browsers only start audio from a user gesture; unlock() is cheap and idempotent.
-window.addEventListener('keydown', () => audio.unlock());
-window.addEventListener('pointerdown', () => audio.unlock());
+// Browsers only start audio from a user gesture; unlock() is cheap, idempotent and never
+// throws (a blocked AudioContext just means silence). Capture phase: nothing on the page
+// can stop the gesture from reaching it.
+const unlockAudio = () => audio.unlock();
+window.addEventListener('keydown', unlockAudio, { capture: true });
+window.addEventListener('pointerdown', unlockAudio, { capture: true });
 
 const game = createGame({
   input: createInput(window),

@@ -43,9 +43,24 @@ export const KEY_BINDINGS = {
   rotateCCW: ['KeyZ'],                    // no Ctrl: Ctrl+W (rotate CW) would close the tab
   hold:      ['KeyC', 'ShiftLeft', 'ShiftRight'],
   pause:     ['KeyP', 'Escape'],
-  start:     ['Enter'],
+  start:     ['Enter', 'NumpadEnter'],
   mute:      ['KeyM'],                    // master: all sound
   music:     ['KeyB'],                    // background music only
+};
+
+// Fallback by KeyboardEvent.key, used only when e.code is empty or unbound: some
+// remote desktops, virtual keyboards and IMEs send key events without a code.
+// Named keys only, so letter keys stay layout-independent via their codes.
+export const KEY_FALLBACKS = {
+  Enter: 'start',
+  ' ': 'hardDrop',
+  Spacebar: 'hardDrop',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowDown: 'softDrop',
+  ArrowUp: 'rotateCW',
+  Escape: 'pause',
+  Esc: 'pause',
 };
 
 // Per piece type index 1–7: face, highlight (top/left bevel), shadow (bottom/right bevel).

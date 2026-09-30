@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createUI, overlayContent, isLevelUpFlashOn } from '../src/ui.js';
+import { createUI, overlayContent, isLevelUpFlashOn, TITLE_PROMPT } from '../src/ui.js';
 import { GAME_OVER_DELAY_FRAMES, LEVEL_UP_FLASH_FRAMES, MAX_START_LEVEL } from '../src/config.js';
 
 /** Minimal stand-in for a DOM element that counts text writes. */
@@ -69,7 +69,7 @@ test('overlay: title and game over screens shown; play phases hidden', () => {
   ui.update(baseState({ phase: 'title' }));
   assert.equal(els.overlay.hidden, false);
   assert.equal(els.overlayTitle.textContent, 'TETRIS');
-  assert.equal(els.overlaySub.textContent, 'PRESS ENTER');
+  assert.equal(els.overlaySub.textContent, TITLE_PROMPT);
 
   for (const phase of ['playing', 'are']) {
     ui.update(baseState({ phase }));
@@ -95,8 +95,11 @@ test('overlay: PAUSED screen while paused, hidden again on resume', () => {
 test('overlay: prompt fits the 160px well at 8px per character', () => {
   const { els, ui } = setup();
   for (const phase of ['title', 'paused', 'gameOver']) {
-    ui.update(baseState({ phase }));
-    assert.ok(els.overlaySub.textContent.length * 8 <= 160 - 2 * 6, `${phase} subtitle`);
+    ui.update(baseState({ phase, gameOverTimer: GAME_OVER_DELAY_FRAMES }));
+    assert.ok(els.overlaySub.textContent.length > 0, `${phase} has a prompt`);
+    for (const line of els.overlaySub.textContent.split('\n')) {
+      assert.ok(line.length * 8 <= 160 - 2 * 6, `${phase} subtitle line "${line}"`);
+    }
     assert.ok(els.overlayTitle.textContent.length * 16 <= 160, `${phase} title`);
   }
 });
@@ -115,7 +118,7 @@ test('title: overlay shows TETRIS, the selector and PRESS ENTER; selector update
   assert.equal(els.overlayTitle.textContent, 'TETRIS');
   assert.equal(els.overlayInfo.hidden, false);
   assert.equal(els.overlayInfo.textContent, 'LEVEL < 03 >');
-  assert.equal(els.overlaySub.textContent, 'PRESS ENTER');
+  assert.equal(els.overlaySub.textContent, TITLE_PROMPT);
   ui.update(baseState({ phase: 'title', startLevel: 4, level: 4 }));
   assert.equal(els.overlayInfo.textContent, 'LEVEL < 04 >');
   assert.equal(els.level.textContent, '04');
@@ -234,4 +237,9 @@ test('toggles are optional: no elements, no errors', () => {
   const ui = createUI(setup().els);
   ui.setMusic(true);
   ui.setMuted(true);
+});
+
+test('title prompt: "PRESS ENTER OR CLICK TO START", on two lines that fit the well', () => {
+  assert.equal(TITLE_PROMPT.replace('\n', ' '), 'PRESS ENTER OR CLICK TO START');
+  assert.equal(TITLE_PROMPT.split('\n').length, 2);
 });

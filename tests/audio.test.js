@@ -608,3 +608,90 @@ function mulberry(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+// ===========================================================================
+// Autoplay / AudioContext guard
+// ===========================================================================
+
+function contextClassWith(patch) {
+  const { FakeAudioContext, instances } = createFakeContextClass();
+  class Patched extends FakeAudioContext {}
+  Object.assign(Patched.prototype, patch);
+  return { Patched, instances };
+}
+
+test('unlock: resume() returning no promise (old WebKit) keeps the context — no leak across gestures', () => {
+  const { Patched, instances } = contextClassWith({ resume() { this.resumes++; return undefined; } });
+  const audio = createAudio({ AudioContext: Patched });
+  for (let i = 0; i < 6; i++) audio.unlock();
+  assert.equal(instances.length, 1, 'one context, not one per keypress');
+  assert.equal(audio.ready, true);
+});
+
+test('unlock: resume() rejecting (strict autoplay) is swallowed; the context stays usable', async () => {
+  const { Patched, instances } = contextClassWith({ resume() { return Promise.reject(new Error('NotAllowedError')); } });
+  const audio = createAudio({ AudioContext: Patched });
+  audio.unlock();
+  await new Promise((r) => setTimeout(r, 10));   // an unhandled rejection would fail this test
+  assert.equal(audio.ready, true);
+  audio.unlock();
+  assert.equal(instances.length, 1);
+  audio.play('move');                            // effects still schedule (they play once allowed)
+});
+
+test('unlock: resume() throwing synchronously keeps the context', () => {
+  const { Patched, instances } = contextClassWith({ resume() { throw new Error('InvalidStateError'); } });
+  const audio = createAudio({ AudioContext: Patched });
+  audio.unlock();
+  audio.unlock();
+  assert.equal(audio.ready, true);
+  assert.equal(instances.length, 1);
+});
+
+test('unlock: graph setup failing after construction closes that context and retries cleanly', () => {
+  const closed = [];
+  let failures = 1;
+  const { Patched, instances } = contextClassWith({
+    close() { closed.push(this); return Promise.resolve(); },
+    createPeriodicWave(real, imag) {
+      if (failures-- > 0) throw new Error('unsupported');
+      return { real, imag };
+    },
+  });
+  const audio = createAudio({ AudioContext: Patched });
+  audio.unlock();
+  assert.equal(audio.ready, false);
+  assert.deepEqual(closed, [instances[0]], 'the half-built context was closed');
+  audio.unlock();
+  assert.equal(audio.ready, true, 'the next gesture succeeds');
+  assert.equal(instances.length, 2);
+});
+
+test('music: a Web Audio exception switches music off for the session instead of throwing', () => {
+  const { Patched, instances } = contextClassWith({});
+  const audio = createAudio({ AudioContext: Patched });
+  audio.unlock();
+  const ctx = instances[0];
+  ctx.builtAtUnlock = ctx.nodes.length;
+  const lead = musicVoices(ctx)[0];
+  let attempts = 0;
+  lead.osc.frequency.setValueAtTime = () => { attempts++; throw new TypeError('non-finite'); };
+  assert.doesNotThrow(() => audio.setMusicActive(true));
+  assert.equal(audio.musicFailed, true);
+  assert.equal(audio.musicPlaying, false);
+  assert.doesNotThrow(() => {
+    for (let i = 0; i < 60; i++) { audio.setMusicActive(true); audio.tick(); }   // a second of frames
+    audio.restartMusic(); audio.toggleMusic(); audio.toggleMusic();
+  });
+  assert.equal(audio.musicPlaying, false, 'stays off');
+  assert.equal(attempts, 1, 'no retry storm: the failing call is not attempted every frame');
+  assert.doesNotThrow(() => audio.play('move'), 'effects still work');
+});
+
+test('mute with a broken master gain automation does not throw', () => {
+  const { audio, ctx } = unlocked();
+  const master = ctx.nodes.find((n) => n.kind === 'gain' && n.connectedTo === ctx.destination);
+  master.gain.setTargetAtTime = () => { throw new Error('closed'); };
+  assert.doesNotThrow(() => audio.setMuted(true));
+  assert.equal(master.gain.value, 0, 'falls back to setting the value directly');
+});

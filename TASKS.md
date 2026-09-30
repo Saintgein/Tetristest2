@@ -441,6 +441,35 @@ all earlier suites still pass: 21, 21, 13, 13, 6).
 
 ---
 
+## Fix — "can't get past the title screen" (GitHub Pages report) ✅
+
+**Files:** `src/game.js`, `src/audio.js`, `src/input.js`, `src/config.js`, `src/ui.js`,
+`src/main.js`, `index.html`, tests
+
+- Not reproducible from the report alone, so every plausible cause was checked
+  in headless Firefox before and after the fix (14 scenarios).
+- **Found, and the likely culprit:** any exception on the title → play frame
+  (e.g. a strict browser rejecting a Web Audio call) aborted `frame()` before it
+  rendered or rescheduled. The state became `playing` but the screen froze on
+  "PRESS ENTER". Now the loop reschedules in `finally`; audio, render and UI
+  fail independently and log once.
+- **Also found:** Numpad Enter and empty-`code` key events didn't start the
+  game. A `resume()` without a promise leaked one AudioContext per keypress.
+- [x] Window key listeners: capture phase, `passive: false`, `preventDefault` on
+      game keys; `NumpadEnter` bound; named-key fallback for empty codes; IME ignored
+- [x] Click / tap anywhere (except buttons and links) starts from the title
+- [x] AudioContext build/resume guarded: rejections swallowed, no context leak,
+      a half-built context is closed; music failure switches music off instead of
+      throwing; the game always proceeds, silent if need be
+- [x] Title prompt: "PRESS ENTER OR CLICK TO START" (two lines to fit the well)
+- [x] Tests: 345 total, including a broken-audio / broken-renderer loop suite and
+      input fallback / pointer-start / listener-option tests; 14/16 deliberate
+      bugs caught, and the 2 survivors are covered by redundant guards
+- [ ] Confirm on the actual GitHub Pages deployment in Chrome / Edge *(only Firefox
+      is available here)*
+
+---
+
 ## Backlog (post-1.0, not scheduled)
 
 - Gamepad API support · touch controls · T-spin & back-to-back scoring ·

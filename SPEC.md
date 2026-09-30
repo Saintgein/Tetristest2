@@ -146,7 +146,7 @@ export const KEY_BINDINGS = {
   rotateCCW: ['KeyZ'],                    // no Ctrl: Ctrl+W (rotate CW) would close the tab
   hold:      ['KeyC', 'ShiftLeft', 'ShiftRight'],
   pause:     ['KeyP', 'Escape'],
-  start:     ['Enter'],
+  start:     ['Enter', 'NumpadEnter'],
   mute:      ['KeyM'],                   // master: all sound
   music:     ['KeyB'],                   // background music only
 };
@@ -311,6 +311,26 @@ Authentic NES timing is `DAS 16 / ARR 6`; that's a `config.js` change only.
   Sets: V8's `Set#add/delete/clear` reallocate their tables.
 - `target` `blur` → `reset()` so keys don't stick. `reset()` clears `held`,
   `pressed` and the DAS state.
+- **Starting has to work everywhere.** These rules came from a report of
+  players stuck on the title screen on GitHub Pages.
+  - **Listeners:** keydown/keyup are on `window` in the **capture** phase
+    with `passive: false`. Nothing on the page can stop propagation first, and
+    `preventDefault()` on game keys always works (Enter on a focused button
+    doesn't click it; Space and the arrows don't scroll).
+  - **Numpad Enter** is bound to `start` too.
+  - **Key fallback:** an action is found by `e.code`, else by `KEY_FALLBACKS`
+    (named `e.key` values: Enter, Space, the arrows, Esc). Some remote
+    desktops, virtual keyboards and IMEs send an empty `code`. Letter keys are
+    never looked up by `key`, so layouts stay physical.
+  - **IME:** `isComposing` / `keyCode 229` events are ignored and not
+    prevented, because they belong to text entry.
+  - **Click to start:** a primary `pointerdown` anywhere (mouse left button,
+    touch, pen) calls `press('start')`, except on
+    `button, a, input, select, textarea, [data-no-start]`. That works even
+    when the page doesn't have keyboard focus. It's harmless in play, where
+    `start` is ignored, and on game over it continues like Enter.
+  - `createInput(target, bindings, timing, { keyFallbacks, pointerStart = true })`;
+    `input.press(action)` injects a press edge.
 
 ### 6.5 `renderer.js`
 
@@ -390,7 +410,7 @@ doesn't blink; the sub line does:
 
 | phase      | title       | info                                   | sub                   |
 |------------|-------------|----------------------------------------|-----------------------|
-| `title`    | `TETRIS`    | `LEVEL < 05 >` (arrow hidden at 0 / 19) | `PRESS ENTER`         |
+| `title`    | `TETRIS`    | `LEVEL < 05 >` (arrow hidden at 0 / 19) | `PRESS ENTER` / `OR CLICK TO START` (`TITLE_PROMPT`, two lines: 29 chars don't fit 160 px) |
 | `paused`   | `PAUSED`    | *(hidden)*                             | `PRESS P TO RESUME`   |
 | `gameOver` | `GAME OVER` | `SCORE 001234` or `NEW TOP 001234`     | `PRESS ENTER` once `gameOverTimer ≥ GAME_OVER_DELAY_FRAMES`, else empty |
 | otherwise  | *(overlay hidden)* |                                  |                       |
@@ -439,6 +459,22 @@ export function noteFreq(midi): number;
 - **Autoplay:** no context exists until `unlock()`. `play()` before that, with
   no Web Audio, or with unknown names is a silent no-op, and errors never
   propagate to the game.
+- **`unlock()` guard** (runs from capture-phase keydown/pointerdown listeners
+  in `main.js`):
+  1. **Build once.** If construction or graph setup throws, a half-built
+     context is `close()`d and state reset, so the next gesture retries
+     without leaking a context per keypress. Browsers cap how many contexts a
+     page may create.
+  2. **Resume** only if suspended. A rejected promise (strict Chrome/Edge
+     autoplay) is swallowed with `.then(undefined, noop)`. A missing promise
+     (old WebKit) and a synchronous throw are both tolerated. A working
+     context is never discarded because `resume()` failed.
+  3. **Reconcile music** through `guardMusic`: if the music code throws,
+     `music.failed` switches music off for the session instead of retrying
+     every frame. Effects keep working.
+
+  `setMuted` / `setVolume` fall back to setting `gain.value` directly if
+  automation throws.
 - **Background music** (same module):
   ```js
   createAudio({ ..., musicEnabled = true })
@@ -726,6 +762,18 @@ function frame(now) {
   regardless of monitor refresh rate (60/120/144 Hz behave identically).
   At 144 Hz most rAF callbacks run 0 steps; edges simply wait in `pressed`.
 - `update()` never touches `input`; the loop owns `input.reset()`.
+- **The loop survives any subsystem failure.** Reproduced bug: one Web Audio
+  exception on the title → play frame aborted `frame()` before it rendered or
+  rescheduled. The state became `playing`, but the screen froze on
+  "PRESS ENTER".
+  - `frame()` reschedules rAF in `finally`.
+  - The per-step `audio.play` / `restartMusic` calls, the music
+    (`setMusicActive` / `tick`), `renderer.render`, `ui.update`, the M/B
+    toggles and `game.pause()` each have their own `try`.
+  - Errors go to `onError(where, err)` (default `console.error`), once per
+    message per subsystem, never 60×/s, and a throwing `onError` is also
+    contained.
+  - There are no closures in the hot path, so the guards don't allocate.
 
 ### 9.1 `update()` — per-phase
 

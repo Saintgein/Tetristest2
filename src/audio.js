@@ -288,6 +288,7 @@ export function createAudio({
     anchorTime: 0,                          // ctx time of anchorBeat
     anchorBeat: 0,                          // absolute beat (loops included) where playback (re)started
     resumeBeat: 0,                          // where to continue after a pause
+    failed: false,                          // Web Audio threw during music: off for this session
     voices: [],                             // { data, osc, env, duck, i, loopBase, fromBeat }
   };
   const voiceByChannel = {};
@@ -408,9 +409,27 @@ export function createAudio({
     music.active = false;
   }
 
+  /**
+   * Runs a music operation; if the browser's Web Audio throws (strict engines reject
+   * odd automation values, a context can be closed under us), music is switched off
+   * for the session instead of the error reaching the game loop every frame.
+   * Sound effects are unaffected.
+   */
+  function guardMusic(operation) {
+    try {
+      operation();
+    } catch {
+      music.failed = true;
+      music.active = false;
+      for (let k = 0; k < music.voices.length; k++) {
+        try { music.voices[k].env.gain.cancelScheduledValues(0); music.voices[k].env.gain.value = 0; } catch { /* ignore */ }
+      }
+    }
+  }
+
   /** Plays iff the context exists, the player wants music and the game is in play. */
   function reconcileMusic() {
-    const should = ctx !== null && music.enabled && music.wanted;
+    const should = ctx !== null && !music.failed && music.enabled && music.wanted;
     if (should && !music.active) startMusic();
     else if (!should && music.active) pauseMusic();
   }
@@ -488,21 +507,42 @@ export function createAudio({
   function setMasterGain() {
     if (!master) return;
     const target = muted ? 0 : level;
-    master.gain.cancelScheduledValues(ctx.currentTime);
-    master.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+    try {
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setTargetAtTime(target, ctx.currentTime, 0.015);
+    } catch {
+      try { master.gain.value = target; } catch { /* context gone: nothing to mute */ }
+    }
   }
 
   return {
     /** Create / resume the AudioContext. Call from a user gesture (keydown, click). */
     unlock() {
       if (!Ctor) return;
-      try {
-        if (!ctx) build();
-        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-        reconcileMusic();
-      } catch {
-        ctx = null;                          // blocked or unsupported: stay silent
+      // 1. Create the context once. If construction or graph setup fails (blocked,
+      //    unsupported, too many contexts), close any half-built context so the next
+      //    gesture can retry without leaking one per keypress.
+      if (!ctx) {
+        try {
+          build();
+        } catch {
+          try { ctx?.close?.(); } catch { /* ignore */ }
+          ctx = null;
+          master = null;
+          musicGain = null;
+          return;                            // stay silent; the game carries on
+        }
       }
+      // 2. Resume. Strict autoplay policies reject the promise; old WebKit returns
+      //    nothing at all. Neither may throw, and neither discards a working context.
+      try {
+        if (ctx.state === 'suspended') {
+          const pending = ctx.resume();
+          if (pending && typeof pending.then === 'function') pending.then(undefined, () => {});
+        }
+      } catch { /* resume() threw synchronously: retry on the next gesture */ }
+      // 3. Start music if the game is already in play.
+      guardMusic(reconcileMusic);
     },
 
     play(name) {
@@ -540,7 +580,7 @@ export function createAudio({
     /** Player preference (B key). Survives pauses; the game decides when music may play. */
     setMusicEnabled(value) {
       music.enabled = Boolean(value);
-      if (ctx) reconcileMusic();
+      if (ctx) guardMusic(reconcileMusic);
     },
 
     toggleMusic() {
@@ -551,25 +591,26 @@ export function createAudio({
     /** Game-driven: true while a game is in play, false on title / pause / game over. Idempotent. */
     setMusicActive(value) {
       music.wanted = value === true;
-      if (ctx) reconcileMusic();
+      if (ctx) guardMusic(reconcileMusic);
     },
 
     /** Back to bar 1 (new game). */
     restartMusic() {
-      if (ctx && music.active) pauseMusic();
+      if (ctx && music.active) guardMusic(pauseMusic);
       music.resumeBeat = 0;
-      if (ctx) reconcileMusic();
+      if (ctx) guardMusic(reconcileMusic);
     },
 
     /** Call once per rendered frame: keeps one measure of notes scheduled ahead. */
     tick() {
-      if (music.active) tickMusic();
+      if (music.active) guardMusic(tickMusic);
     },
 
     get muted() { return muted; },
     get ready() { return ctx !== null; },
     get musicEnabled() { return music.enabled; },
     get musicPlaying() { return music.active; },
+    get musicFailed() { return music.failed; },
     /** Current song position in beats (tests / debugging). */
     get musicBeat() {
       if (!ctx || !music.active) return music.resumeBeat;

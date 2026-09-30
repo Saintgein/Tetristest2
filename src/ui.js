@@ -8,6 +8,12 @@ import { MAX_START_LEVEL, GAME_OVER_DELAY_FRAMES } from './config.js';
 
 const pad = (value, digits) => String(value).padStart(digits, '0');
 
+/**
+ * Title prompt. 29 characters don't fit the 160 px well at 8 px each, so it breaks
+ * into two lines that do (the overlay uses white-space: pre-line).
+ */
+export const TITLE_PROMPT = 'PRESS ENTER\nOR CLICK TO START';
+
 /** Level selector with arrows only where another level is available: "< 05 >". */
 function levelSelector(level) {
   const left = level > 0 ? '<' : ' ';
@@ -19,7 +25,7 @@ function levelSelector(level) {
 export function overlayContent(state) {
   switch (state.phase) {
     case 'title':
-      return { title: 'TETRIS', info: levelSelector(state.startLevel), sub: 'PRESS ENTER' };
+      return { title: 'TETRIS', info: levelSelector(state.startLevel), sub: TITLE_PROMPT };
     case 'paused':
       return { title: 'PAUSED', info: null, sub: 'PRESS P TO RESUME' };
     case 'gameOver':

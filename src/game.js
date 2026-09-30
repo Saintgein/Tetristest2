@@ -483,29 +483,51 @@ export function createGame({
   audio,
   initialState = createInitialState(),
   storage = defaultStorage(),
+  onError = (where, err) => console.error(`[tetris] ${where} error (the game keeps running):`, err),
   raf = (cb) => requestAnimationFrame(cb),
   caf = (id) => cancelAnimationFrame(id),
 }) {
   const state = initialState;
   state.hiScore = Math.max(state.hiScore, loadHiScore(storage));
-  const muted = loadMuted(storage);
-  audio.setMuted?.(muted);
-  ui.setMuted?.(muted);
+  const reported = new Map();                    // where → last message, so errors log once
+  function report(where, err) {
+    const message = String(err?.message ?? err);
+    if (reported.get(where) === message) return;
+    reported.set(where, message);
+    try { onError(where, err); } catch { /* a broken logger must not break the loop */ }
+  }
 
+  const muted = loadMuted(storage);
   const musicOn = loadBgmEnabled(storage);
-  audio.setMusicEnabled?.(musicOn);
+  try {
+    audio.setMuted?.(muted);
+    audio.setMusicEnabled?.(musicOn);
+  } catch (err) {
+    report('audio', err);
+  }
+  ui.setMuted?.(muted);
   ui.setMusic?.(musicOn);
 
   function toggleMute() {
-    const now = audio.toggleMute ? audio.toggleMute() : false;
-    ui.setMuted?.(now);
+    let now = false;
+    try {
+      now = audio.toggleMute ? audio.toggleMute() : false;
+      ui.setMuted?.(now);
+    } catch (err) {
+      report('audio', err);
+    }
     saveValue(storage, MUTE_KEY, now ? 1 : 0);
     return now;
   }
 
   function toggleMusic() {
-    const on = audio.toggleMusic ? audio.toggleMusic() : false;
-    ui.setMusic?.(on);
+    let on = false;
+    try {
+      on = audio.toggleMusic ? audio.toggleMusic() : false;
+      ui.setMusic?.(on);
+    } catch (err) {
+      report('audio', err);
+    }
     saveValue(storage, BGM_KEY, on ? 1 : 0);
     return on;
   }
@@ -514,7 +536,24 @@ export function createGame({
   let running = false;
   let rafId = 0;
 
+  /**
+   * The loop must survive anything a subsystem throws. Before this, a single
+   * Web Audio exception on the title → play frame aborted frame() before it
+   * rendered or rescheduled itself: the state was 'playing' but the screen stayed
+   * frozen on "PRESS ENTER". Now every frame reschedules in `finally`, and audio,
+   * rendering and UI fail independently (reported once each, not 60×/s).
+   */
   function frame(now) {
+    try {
+      runFrame(now);
+    } catch (err) {
+      report('frame', err);
+    } finally {
+      if (running) rafId = raf(frame);
+    }
+  }
+
+  function runFrame(now) {
     const steps = advanceClock(clock, now);
     for (let i = 0; i < steps; i++) {
       const prevPhase = state.phase;
@@ -523,23 +562,42 @@ export function createGame({
       if (actions.mute) toggleMute();            // settings, not game state: work in every phase
       if (actions.music) toggleMusic();
       update(state, actions, events);
-      for (let e = 0; e < events.length; e++) audio.play(events[e]);
+      try {
+        for (let e = 0; e < events.length; e++) audio.play(events[e]);
+      } catch (err) {
+        report('audio', err);                    // silence, never a stuck game
+      }
       if (state.phase !== prevPhase && touchesMenu(prevPhase, state.phase)) input.reset();
       if (state.phase === 'gameOver' && prevPhase !== 'gameOver' && state.newHiScore) {
         saveHiScore(storage, state.hiScore);
       }
       if (prevPhase === 'title' && state.phase === 'playing') {
         saveValue(storage, START_LEVEL_KEY, state.startLevel);
-        audio.restartMusic?.();                   // every new game starts at bar 1
+        try {
+          audio.restartMusic?.();                 // every new game starts at bar 1
+        } catch (err) {
+          report('audio', err);
+        }
       }
     }
     // Music plays only while a game is in play; pause / title / game over stop it
     // (it resumes from the same beat). tick() keeps a measure scheduled ahead.
-    audio.setMusicActive?.(IN_GAME_PHASES.has(state.phase));
-    audio.tick?.();
-    renderer.render(state);
-    ui.update(state);
-    if (running) rafId = raf(frame);
+    try {
+      audio.setMusicActive?.(IN_GAME_PHASES.has(state.phase));
+      audio.tick?.();
+    } catch (err) {
+      report('audio', err);
+    }
+    try {
+      renderer.render(state);
+    } catch (err) {
+      report('render', err);
+    }
+    try {
+      ui.update(state);
+    } catch (err) {
+      report('ui', err);
+    }
   }
 
   return {
@@ -561,8 +619,12 @@ export function createGame({
      */
     pause() {
       if (!pauseGame(state)) return false;
-      audio.play('pause');
-      audio.setMusicActive?.(false);             // hidden tabs get no more frames: stop now
+      try {
+        audio.play('pause');
+        audio.setMusicActive?.(false);           // hidden tabs get no more frames: stop now
+      } catch (err) {
+        report('audio', err);
+      }
       input.reset();
       clock.last = null;
       return true;

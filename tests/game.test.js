@@ -1984,3 +1984,111 @@ test('loadBgmEnabled: only an explicit 0 turns music off', () => {
   assert.equal(loadBgmEnabled(null), true);
   assert.equal(loadBgmEnabled({ getItem() { throw new Error('blocked'); } }), true);
 });
+
+// ===========================================================================
+// A broken subsystem must never stop the game (title → play in particular)
+// ===========================================================================
+
+function resilientHarness(overrides = {}) {
+  const h = loopHarness();
+  const errors = [];
+  // Rebuild the game with failing parts but the same fake input / rAF
+  const clock = h.clock;
+  const audio = { ...h.audio, ...overrides.audio };
+  const renderer = overrides.renderer ?? h.renderer;
+  const ui = overrides.ui ?? h.ui;
+  const game = createGame({
+    input: h.input, renderer, ui, audio, storage: null,
+    initialState: createInitialState({ rng: seeded(5) }),
+    onError: (where, err) => errors.push([where, String(err.message ?? err)]),
+    raf: clock.raf, caf: clock.caf,
+  });
+  let t = 1000;
+  const frame = (dt = STEP_MS) => clock.tick((t += dt));
+  return { ...h, game, state: game.getState(), frame, errors };
+}
+
+test('Enter on the title completes even if music throws on that frame (the frozen-title bug)', () => {
+  const h = resilientHarness({ audio: { setMusicActive() { throw new TypeError('non-finite value'); } } });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  const renders = h.renderer.calls;
+  const uiCalls = h.ui.calls;
+  h.frame();
+  assert.equal(h.state.phase, 'playing');
+  assert.equal(h.renderer.calls, renders + 1, 'the frame still rendered');
+  assert.equal(h.ui.calls, uiCalls + 1, 'the overlay still updated (no stuck "PRESS ENTER")');
+  assert.ok(h.clock.pending, 'the loop rescheduled itself');
+  for (let i = 0; i < 30; i++) h.frame();
+  assert.ok(h.state.frame > 20, 'game keeps running');
+  assert.deepEqual(h.errors, [['audio', 'non-finite value']], 'reported once, not every frame');
+});
+
+test('audio.play / restartMusic / tick throwing: play continues silently', () => {
+  const boom = () => { throw new Error('audio broke'); };
+  const h = resilientHarness({ audio: { play: boom, restartMusic: boom, tick: boom } });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }), A({ hardDrop: true }));
+  h.frame(); h.frame();
+  for (let i = 0; i <= ARE_FRAMES; i++) h.frame();
+  assert.equal(h.state.stats.pieces, 1);
+  assert.equal(h.state.phase, 'playing');
+  assert.ok(h.errors.every(([where]) => where === 'audio'));
+});
+
+test('renderer throwing: UI and game logic keep going, loop alive', () => {
+  const h = resilientHarness({ renderer: { calls: 0, render() { this.calls++; throw new Error('canvas lost'); } } });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  assert.equal(h.state.phase, 'playing');
+  assert.ok(h.ui.calls >= 2, 'UI still updated');
+  assert.ok(h.clock.pending);
+  assert.deepEqual(h.errors, [['render', 'canvas lost']]);
+});
+
+test('a throwing error reporter cannot break the loop either', () => {
+  const h = loopHarness();
+  const game = createGame({
+    input: h.input, renderer: { render() { throw new Error('x'); } }, ui: h.ui, audio: h.audio, storage: null,
+    initialState: createInitialState({ rng: seeded(5) }),
+    onError() { throw new Error('logger broke'); },
+    raf: h.clock.raf, caf: h.clock.caf,
+  });
+  game.start();
+  let t = 1000;
+  for (let i = 0; i < 5; i++) h.clock.tick((t += STEP_MS));
+  assert.ok(h.clock.pending);
+  assert.ok(game.getState().frame >= 3);
+});
+
+test('game.pause() (tab hidden) still pauses when audio throws', () => {
+  const boom = () => { throw new Error('closed context'); };
+  const h = resilientHarness({ audio: { play: boom, setMusicActive: boom } });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  assert.equal(h.game.pause(), true);
+  assert.equal(h.state.phase, 'paused');
+});
+
+test('audio that throws at startup does not prevent the game from being created', () => {
+  const boom = () => { throw new Error('no audio'); };
+  const h = resilientHarness({ audio: { setMuted: boom, setMusicEnabled: boom } });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  assert.equal(h.state.phase, 'playing');
+});
+
+test('M / B toggles with throwing audio: no crash, setting still saved', () => {
+  const boom = () => { throw new Error('nope'); };
+  const h = resilientHarness({ audio: { toggleMute: boom, toggleMusic: boom } });
+  assert.equal(h.game.toggleMute(), false);
+  assert.equal(h.game.toggleMusic(), false);
+});
