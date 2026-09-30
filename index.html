@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>TETRIS</title>
+
+  <!-- Only external resource. The game must stay playable if this fails (monospace fallback). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="src/main.js"></script>
+</head>
+<body>
+  <div class="cabinet" id="cabinet">
+    <header class="marquee">
+      <h1 class="logo">TETRIS</h1>
+    </header>
+
+    <main class="playarea">
+      <aside class="panel">
+        <section class="box">
+          <h2 class="box__title">HOLD</h2>
+          <canvas id="hold-canvas" class="pixel-canvas pixel-canvas--hold" width="80" height="48"></canvas>
+        </section>
+
+        <section class="box">
+          <dl class="stats">
+            <dt>SCORE</dt>
+            <dd id="hud-score">000000</dd>
+            <dt>TOP</dt>
+            <dd id="hud-hiscore">000000</dd>
+          </dl>
+        </section>
+      </aside>
+
+      <div class="well">
+        <canvas id="board-canvas" class="pixel-canvas pixel-canvas--board" width="160" height="320"
+                aria-label="Playfield"></canvas>
+        <div class="overlay" id="overlay">
+          <p class="overlay__title" id="overlay-title">TETRIS</p>
+          <p class="overlay__sub blink" id="overlay-sub">PRESS ENTER</p>
+        </div>
+      </div>
+
+      <aside class="panel">
+        <section class="box">
+          <h2 class="box__title">NEXT</h2>
+          <canvas id="next-canvas" class="pixel-canvas pixel-canvas--next" width="80" height="144"></canvas>
+        </section>
+
+        <section class="box">
+          <dl class="stats">
+            <dt>LEVEL</dt>
+            <dd id="hud-level">00</dd>
+            <dt>LINES</dt>
+            <dd id="hud-lines">000</dd>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="controls-help">
+      <ul>
+        <li><kbd>ARROWS</kbd>/<kbd>WASD</kbd> MOVE</li>
+        <li><kbd>UP</kbd>/<kbd>X</kbd> ROTATE</li>
+        <li><kbd>SPACE</kbd> DROP</li>
+        <li><kbd>C</kbd> HOLD</li>
+        <li><kbd>P</kbd> PAUSE</li>
+      </ul>
+    </footer>
+  </div>
+
+  <div class="crt" aria-hidden="true"></div>
+</body>
+</html>

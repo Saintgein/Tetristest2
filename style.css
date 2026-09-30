@@ -1,0 +1,239 @@
+/* ==========================================================================
+   Retro Tetris — arcade cabinet styling
+   All sizes are logical pixels: calc(N * var(--px)). --scale is an integer
+   set by src/main.js so every logical pixel renders as a crisp N×N square.
+   ========================================================================== */
+
+:root {
+  --scale: 2;
+  --px: calc(var(--scale) * 1px);
+
+  /* NES-inspired palette */
+  --bg:          #06060c;
+  --bg-glow:     #141430;
+  --frame:       #1c1c38;
+  --frame-light: #4848a0;
+  --frame-dark:  #08081a;
+  --well:        #000000;
+  --text:        #fcfcfc;
+  --text-dim:    #7c7cbc;
+  --yellow:      #f8b800;
+  --magenta:     #e40058;
+  --cyan:        #3cbcfc;
+
+  --font: 'Press Start 2P', 'Courier New', monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at center, var(--bg-glow) 0%, var(--bg) 70%) fixed;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: calc(8 * var(--px));
+  line-height: 1;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+  font-smooth: never;
+  user-select: none;
+}
+
+h1, h2, p, dl, dd, ul {
+  margin: 0;
+  padding: 0;
+  font-weight: normal;
+}
+
+/* ---------- Bevel helper: light top-left, dark bottom-right, black outline ---------- */
+
+.cabinet,
+.box,
+.well {
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--frame-light),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--frame-dark),
+    0 0 0 var(--px) #000;
+}
+
+/* ---------- Cabinet layout ---------- */
+
+.cabinet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(8 * var(--px));
+  padding: calc(8 * var(--px));
+  background: var(--frame);
+}
+
+.marquee {
+  padding: calc(4 * var(--px)) 0;
+}
+
+.logo {
+  font-size: calc(16 * var(--px));
+  letter-spacing: calc(2 * var(--px));
+  color: var(--yellow);
+  /* Stacked hard pixel shadows — no blur */
+  text-shadow:
+    var(--px) var(--px) 0 var(--magenta),
+    calc(2 * var(--px)) calc(2 * var(--px)) 0 var(--magenta),
+    calc(3 * var(--px)) calc(3 * var(--px)) 0 #000;
+}
+
+.playarea {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8 * var(--px));
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--px));
+  width: calc(88 * var(--px));
+}
+
+.box {
+  padding: calc(4 * var(--px));
+  background: var(--well);
+}
+
+.box__title {
+  margin-bottom: calc(4 * var(--px));
+  font-size: calc(8 * var(--px));
+  color: var(--cyan);
+  text-align: center;
+}
+
+.stats {
+  display: grid;
+  gap: calc(4 * var(--px));
+  padding: calc(2 * var(--px));
+}
+
+.stats dt {
+  color: var(--text-dim);
+}
+
+.stats dd {
+  margin-bottom: calc(4 * var(--px));
+  color: var(--text);
+  text-align: right;
+}
+
+.stats dd:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- Well & canvases ---------- */
+
+.well {
+  position: relative;
+  padding: calc(6 * var(--px));
+  background: var(--well);
+}
+
+.pixel-canvas {
+  display: block;
+  image-rendering: crisp-edges; /* Firefox */
+  image-rendering: pixelated;   /* Chromium / Safari */
+  background: var(--well);
+}
+
+/* CSS size = canvas logical size × scale (canvas width/height attrs stay 1:1 logical) */
+.pixel-canvas--board { width: calc(160 * var(--px)); height: calc(320 * var(--px)); }
+.pixel-canvas--hold  { width: calc(80 * var(--px));  height: calc(48 * var(--px)); }
+.pixel-canvas--next  { width: calc(80 * var(--px));  height: calc(144 * var(--px)); }
+
+/* ---------- Overlay (title / pause / game over) ---------- */
+
+.overlay {
+  position: absolute;
+  inset: calc(6 * var(--px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(16 * var(--px));
+  background: rgba(0, 0, 0, 0.75);
+  text-align: center;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay__title {
+  font-size: calc(16 * var(--px));
+  color: var(--yellow);
+  text-shadow: calc(2 * var(--px)) calc(2 * var(--px)) 0 var(--magenta);
+}
+
+.overlay__sub {
+  line-height: 2;
+  white-space: pre-line; /* ui.js may use "\n" for multi-line subtitles */
+}
+
+.blink {
+  animation: blink 1s steps(1, end) infinite;
+}
+
+@keyframes blink {
+  50% { visibility: hidden; }
+}
+
+/* ---------- Footer controls help ---------- */
+
+.controls-help ul {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(6 * var(--px)) calc(12 * var(--px));
+  max-width: calc(360 * var(--px));
+  list-style: none;
+  color: var(--text-dim);
+}
+
+.controls-help kbd {
+  font-family: inherit;
+  color: var(--text);
+}
+
+/* ---------- CRT overlay: scanlines + vignette ---------- */
+
+.crt {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent var(--px),
+      rgba(0, 0, 0, 0.22) var(--px),
+      rgba(0, 0, 0, 0.22) calc(2 * var(--px))
+    ),
+    radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blink {
+    animation: none;
+  }
+}
