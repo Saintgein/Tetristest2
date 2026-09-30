@@ -34,7 +34,7 @@ export const KEY_BINDINGS = {
   softDrop:  ['ArrowDown', 'KeyS'],
   hardDrop:  ['Space'],
   rotateCW:  ['ArrowUp', 'KeyX', 'KeyW'],
-  rotateCCW: ['KeyZ', 'ControlLeft'],
+  rotateCCW: ['KeyZ'],                    // no Ctrl: Ctrl+W (rotate CW) would close the tab
   hold:      ['KeyC', 'ShiftLeft', 'ShiftRight'],
   pause:     ['KeyP', 'Escape'],
   start:     ['Enter'],

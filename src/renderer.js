@@ -90,3 +90,20 @@ export function drawPiece(ctx, piece) {
     drawBlock(ctx, x * BLOCK, (y - HIDDEN_ROWS) * BLOCK, typeId);
   }
 }
+/**
+ * Per-frame renderer used by the game loop (SPEC §6.5). M2 draws the well and
+ * the active piece; hold/next previews and the ghost arrive in M3.
+ * @param {{ boardCanvas: HTMLCanvasElement, holdCanvas: HTMLCanvasElement, nextCanvas: HTMLCanvasElement }} canvases
+ * @returns {{ render(state: object): void }}
+ */
+export function createRenderer({ boardCanvas }) {
+  const ctx = boardCanvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  return {
+    render(state) {
+      drawBoard(ctx, state.board);
+      if (state.active) drawPiece(ctx, state.active);
+    },
+  };
+}

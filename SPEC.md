@@ -137,7 +137,7 @@ export const KEY_BINDINGS = {
   softDrop:  ['ArrowDown', 'KeyS'],
   hardDrop:  ['Space'],
   rotateCW:  ['ArrowUp', 'KeyX', 'KeyW'],
-  rotateCCW: ['KeyZ', 'ControlLeft'],
+  rotateCCW: ['KeyZ'],                    // no Ctrl: Ctrl+W (rotate CW) would close the tab
   hold:      ['KeyC', 'ShiftLeft', 'ShiftRight'],
   pause:     ['KeyP', 'Escape'],
   start:     ['Enter'],
@@ -215,6 +215,7 @@ headroom). `clearRows` must handle non-contiguous rows.
 ### 6.3 `progression.js`
 
 ```js
+export const GRAVITY_EPSILON = 1e-9;                     // accumulator tolerance, see §8.1
 export function getGravity(level): number;               // rows per frame (G)
 export function getLockDelay(level): number;             // frames
 export function linesToFirstLevelUp(startLevel): number;
@@ -231,7 +232,13 @@ Details in §8.
 ### 6.4 `input.js`
 
 ```js
-export function createInput(target = window, bindings = KEY_BINDINGS): Input;
+export function createInput(
+  target = window,
+  bindings = KEY_BINDINGS,
+  { dasFrames = DAS_FRAMES, arrFrames = ARR_FRAMES } = {},   // override for tests / settings
+): Input;
+// Held state is tracked per KeyboardEvent.code, so aliases (ArrowLeft + KeyA)
+// don't release each other; a second alias of a held action is not a new press.
 
 /** @typedef {Object} Input
  * @property {() => Actions} poll      called exactly once per simulation frame
@@ -255,19 +262,42 @@ export function createInput(target = window, bindings = KEY_BINDINGS): Input;
 Internals — keep the DAS math in a pure helper so it's Node-testable:
 
 ```js
+export function emptyActions(): Actions;                   // all false / 0 — base for tests
 export function createDasState(): { dir: -1|0|1, frames: number };
-export function stepDas(das, leftHeld, rightHeld, lastPressed, dasFrames, arrFrames): -1|0|1;
+/** Advances DAS one frame. `dir` = resolved horizontal direction this frame,
+ *  `fresh` = that direction's key had a press edge since the last poll. */
+export function stepDas(das, dir, fresh, dasFrames, arrFrames): -1|0|1;
 ```
 
+```js
+function stepDas(das, dir, fresh, dasFrames, arrFrames) {
+  if (dir === 0) { das.dir = 0; das.frames = 0; return 0; }
+  if (dir !== das.dir || fresh) { das.dir = dir; das.frames = 0; return dir; } // initial shift
+  das.frames++;
+  if (das.frames < dasFrames) return 0;                  // charging
+  if (arrFrames === 0) return dir;                       // poll() also sets shiftToWall
+  return (das.frames - dasFrames) % arrFrames === 0 ? dir : 0;
+}
+```
+
+With `DAS_FRAMES = 10, ARR_FRAMES = 2`, holding a direction shifts on poll
+indices 0, 10, 12, 14, … (initial shift, ~167 ms charge, then 30 cells/s).
+Authentic NES timing is `DAS 16 / ARR 6`; that's a `config.js` change only.
+
 - `keydown`/`keyup` listeners record `held` (Set of action names) and
-  `pressed` (edges since last poll). `e.repeat` events are **ignored** — we
-  implement repeat ourselves.
-- `preventDefault()` on any bound key (stops arrow/space page scroll).
-- **Last-pressed wins** when Left and Right are both held.
-- DAS: on the frame a direction is pressed → shift 1 immediately, counter = 0.
-  While held, counter++; once `counter >= DAS_FRAMES`, shift every
-  `ARR_FRAMES` frames. Releasing / changing direction resets the counter.
-- `window` `blur` → `reset()` so keys don't stick.
+  `pressed` (edges since last poll). Look up actions by `e.code`.
+  `e.repeat` events are **ignored** — we implement repeat ourselves.
+- `preventDefault()` on any bound key (stops arrow/space page scroll),
+  including repeats.
+- Resolving `dir` in `poll()`: a direction counts as active if it is held
+  **or** has a press edge this poll (so a tap released before the next frame
+  still shifts once). If both are active, **last-pressed wins**.
+- A fresh press edge always restarts DAS, even if `das.dir` already matches.
+- `softDrop` is active if held or pressed this poll. `rotate`: CW edge → 1,
+  else CCW edge → −1. `menuX` mirrors the horizontal press edges.
+- `poll()` clears `pressed` and returns a new `Actions` object.
+- `target` `blur` → `reset()` so keys don't stick. `reset()` clears `held`,
+  `pressed` and the DAS state.
 
 ### 6.5 `renderer.js`
 
@@ -350,9 +380,18 @@ volume envelope) played through a shared master `GainNode`. Must be a no-op
 ### 6.8 `game.js`
 
 ```js
-export function createGame({ input, renderer, ui, audio, storage = localStorage }): Game;
+export function createGame({
+  input, renderer, ui, audio,
+  storage = localStorage,
+  initialState = createInitialState(),
+  raf = requestAnimationFrame, caf = cancelAnimationFrame,   // injectable for tests
+}): Game;
 export function createInitialState({ startLevel = 0, hiScore = 0, rng = Math.random } = {}): GameState;
 export function update(state, actions, events): void;   // one 60 Hz tick, pure w.r.t. DOM
+
+// Fixed-timestep clock (pure; see §9)
+export function createClock(): { last: number | null, acc: number };
+export function advanceClock(clock, nowMs, stepMs = STEP_MS, maxFrameMs = MAX_FRAME_MS): number; // steps to run
 
 /** @typedef {Object} Game
  * @property {() => void} start   // begins rAF loop (title screen)
@@ -381,6 +420,7 @@ const state = {
 
   board: createBoard(),        // Board
   active: null,                // Piece | null
+  rng,                         // () => number — kept so newGame() can build a fresh bag
   bag,                         // from createBag(rng)
   queue: [],                   // PieceType[NEXT_COUNT] (mirror of bag.peek for renderer)
   hold: { type: null, used: false },
@@ -420,6 +460,11 @@ const state = {
   - Level 29: 1 row/frame (NES "kill screen" speed).
   - Levels 30–99: linear ramp `G = 1 + (level − 29) × (19 / 70)` → 20 G at 99
     (piece effectively appears on the stack).
+  - **Float gotcha:** summing `1/framesPerRow` drifts below 1.0 at the
+    expected frame for levels 2–5, 7 and 9 (e.g. six additions of `1/6` give
+    `0.9999…`), costing an extra frame per row. Compare with
+    `gravityAcc >= 1 - GRAVITY_EPSILON` (`GRAVITY_EPSILON = 1e-9`, exported
+    from `progression.js`) and clamp `gravityAcc` to ≥ 0 after subtracting.
 - Soft drop uses `max(G, SOFT_DROP_G)`; each row moved by soft drop scores 1.
 - **Lock delay** (`getLockDelay(level)`): `LOCK_DELAY_FRAMES` (30) through
   level 29, then linearly down to 12 frames at level 99.
@@ -488,27 +533,47 @@ holds. If none succeed, rotation fails silently (no SFX).
 Fixed-timestep simulation, variable-rate rendering:
 
 ```js
-function loop(now) {
-  let dt = Math.min(now - lastTime, MAX_FRAME_MS);
-  lastTime = now;
-  accumulator += dt;
-  while (accumulator >= STEP_MS) {
-    const actions = input.poll();
-    const events = [];
-    update(state, actions, events);
+const CLOCK_SLOP_MS = 0.5;   // absorbs rAF timestamp jitter (16.66 vs 16.67 ms)
+
+function advanceClock(clock, now, stepMs = STEP_MS, maxFrameMs = MAX_FRAME_MS) {
+  if (clock.last === null) { clock.last = now; return 0; }   // first frame / after stop()
+  const dt = Math.min(Math.max(0, now - clock.last), maxFrameMs);
+  clock.last = now;
+  clock.acc += dt;
+  const steps = Math.floor((clock.acc + CLOCK_SLOP_MS) / stepMs);
+  clock.acc -= steps * stepMs;                                // may dip ≤ 0.5 ms below 0
+  return steps;
+}
+
+function frame(now) {
+  const steps = advanceClock(clock, now);
+  for (let i = 0; i < steps; i++) {
+    const prevPhase = state.phase;
+    events.length = 0;                        // one reused array
+    update(state, input.poll(), events);
     for (const e of events) audio.play(e);
-    accumulator -= STEP_MS;
+    if (state.phase !== prevPhase && touchesMenu(prevPhase, state.phase)) input.reset();
   }
   renderer.render(state);
   ui.update(state);
-  rafId = requestAnimationFrame(loop);
+  rafId = raf(frame);
 }
+// touchesMenu: either phase ∈ {'title', 'paused', 'gameOver'}. Never reset
+// between 'playing' / 'are' / 'lineClear', so DAS charge carries across pieces.
 ```
 
-- `document.visibilitychange` → hidden: auto-pause if playing; also reset
-  `lastTime` on resume to avoid a catch-up burst.
+- Without `CLOCK_SLOP_MS`, a 60 Hz display alternates 0 and 2 steps on some
+  frames because rAF deltas straddle `STEP_MS` — visible as stutter.
+- Displays that aren't exactly 60 Hz still get a rare single correction to
+  stay real-time: 59.94 Hz gets one double step every ~16 s, and 60.006 Hz gets
+  one frame with no step. That's intended; don't "fix" it by locking to vsync.
+- `MAX_FRAME_MS = 250` caps catch-up at 15 steps after a stall.
+- `document.visibilitychange` → hidden: auto-pause if playing; on resume set
+  `clock.last = null` to avoid a catch-up burst.
 - Input is polled **inside** the fixed step so DAS timing is frame-exact
   regardless of monitor refresh rate (60/120/144 Hz behave identically).
+  At 144 Hz most rAF callbacks run 0 steps; edges simply wait in `pressed`.
+- `update()` never touches `input`; the loop owns `input.reset()`.
 
 ### 9.1 `update()` — per-phase
 
@@ -520,14 +585,16 @@ are:       areTimer--; when 0 → spawnNext()  (block-out check)
 lineClear: clearing.timer++; when ≥ LINE_CLEAR_FRAMES → clearRows, score,
            recompute level, phase = 'are'
 playing:
-  1. pause  → pausedFrom = 'playing', phase = 'paused', input.reset(); return
+  1. pause  → pausedFrom = 'playing', phase = 'paused'; return   (loop resets input)
   2. hold   → tryHold()
   3. rotate → tryRotate()                (grounded success → lock reset)
   4. shift  → tryMove(dx, 0)             (grounded success → lock reset)
   5. hardDrop → move dropDistance rows, +2/row, lockAndAdvance(); return
   6. gravity: gravityAcc += softDrop ? max(G, SOFT_DROP_G) : G
-              while gravityAcc ≥ 1: if !tryMove(0,1) {gravityAcc = 0; break}
-                                    gravityAcc -= 1; if softDrop score += 1
+              while gravityAcc ≥ 1 − GRAVITY_EPSILON:
+                gravityAcc = max(0, gravityAcc − 1)
+                if !tryMove(0,1) {gravityAcc = 0; break}
+                if softDrop score += 1
   7. grounded? lock.timer++ ; if ≥ getLockDelay(level) → lockAndAdvance()
                else lock.timer = 0
 

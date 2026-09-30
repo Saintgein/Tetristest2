@@ -1,16 +1,19 @@
-// Milestone 2 debug bootstrap.
-// Fits the cabinet to the viewport at an integer pixel scale and renders a
-// static scene (empty well + one I and one T piece) to verify the renderer.
-// The real game loop replaces this wiring in a later milestone.
+// ==========================================================================
+//  src/main.js
+//  Bootstrap: integer pixel scaling + wiring the game modules together.
+//  QA aid: ?level=N (0–99) sets the start level until the M4 level menu.
+// ==========================================================================
 
-import { COLS, ROWS } from './config.js';
-import { createBoard } from './board.js';
-import { spawnPiece } from './pieces.js';
-import { drawBoard, drawPiece } from './renderer.js';
+import { MAX_LEVEL } from './config.js';
+import { createInput } from './input.js';
+import { createRenderer } from './renderer.js';
+import { createUI } from './ui.js';
+import { createGame, createInitialState } from './game.js';
 
 const MAX_SCALE = 6;
 
-const cabinet = document.getElementById('cabinet');
+const $ = (id) => document.getElementById(id);
+const cabinet = $('cabinet');
 const root = document.documentElement;
 
 function getScale() {
@@ -31,30 +34,32 @@ function fitScale() {
   if (scale !== current) root.style.setProperty('--scale', String(scale));
 }
 
-function getContext(id) {
-  const ctx = document.getElementById(id).getContext('2d');
-  ctx.imageSmoothingEnabled = false;
-  return ctx;
-}
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-// --- Static debug scene ----------------------------------------------------
-const boardCtx = getContext('board-canvas');
-getContext('hold-canvas');
-getContext('next-canvas');
+const startLevel = clamp(
+  parseInt(new URLSearchParams(location.search).get('level'), 10) || 0, 0, MAX_LEVEL);
 
-const board = createBoard(COLS, ROWS); // 10 × 22, 2 hidden rows
+const game = createGame({
+  input: createInput(window),
+  renderer: createRenderer({
+    boardCanvas: $('board-canvas'),
+    holdCanvas: $('hold-canvas'),
+    nextCanvas: $('next-canvas'),
+  }),
+  ui: createUI({
+    score: $('hud-score'),
+    hiScore: $('hud-hiscore'),
+    level: $('hud-level'),
+    lines: $('hud-lines'),
+    overlay: $('overlay'),
+    overlayTitle: $('overlay-title'),
+    overlaySub: $('overlay-sub'),
+  }),
+  audio: { play() {} },                        // M5
+  initialState: createInitialState({ startLevel }),
+});
 
-// Spawn both pieces, then nudge them into the visible well so the debug
-// scene is actually on screen (spawn rows 0–1 are hidden).
-const iPiece = spawnPiece('I');
-iPiece.y = 5;
-const tPiece = spawnPiece('T');
-tPiece.y = 10;
-
-drawBoard(boardCtx, board);
-drawPiece(boardCtx, iPiece);
-drawPiece(boardCtx, tPiece);
-// ---------------------------------------------------------------------------
+game.start();
 
 fitScale();
 window.addEventListener('resize', fitScale);
