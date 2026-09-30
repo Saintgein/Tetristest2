@@ -68,3 +68,23 @@ test('overlay: title and game over screens shown; play phases hidden', () => {
   assert.equal(els.overlay.hidden, false);
   assert.equal(els.overlayTitle.textContent, 'GAME OVER');
 });
+
+test('overlay: PAUSED screen while paused, hidden again on resume', () => {
+  const { els, ui } = setup();
+  ui.update(baseState({ phase: 'playing' }));
+  ui.update(baseState({ phase: 'paused' }));
+  assert.equal(els.overlay.hidden, false);
+  assert.equal(els.overlayTitle.textContent, 'PAUSED');
+  assert.equal(els.overlaySub.textContent, 'PRESS P TO RESUME');
+  ui.update(baseState({ phase: 'playing' }));
+  assert.equal(els.overlay.hidden, true);
+});
+
+test('overlay: prompt fits the 160px well at 8px per character', () => {
+  const { els, ui } = setup();
+  for (const phase of ['title', 'paused', 'gameOver']) {
+    ui.update(baseState({ phase }));
+    assert.ok(els.overlaySub.textContent.length * 8 <= 160 - 2 * 6, `${phase} subtitle`);
+    assert.ok(els.overlayTitle.textContent.length * 16 <= 160, `${phase} title`);
+  }
+});

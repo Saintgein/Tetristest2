@@ -270,10 +270,28 @@ export function update(state, actions, events) {
     case 'gameOver':
       if (actions.start) state.phase = 'title';
       break;
+    case 'paused':
+      // Nothing advances: gravity, lock delay and ARE resume exactly where they stopped.
+      if (actions.pause) {
+        state.phase = state.pausedFrom;
+        state.pausedFrom = null;
+        events.push('pause');
+      }
+      break;
     case 'playing':
+      if (actions.pause) {
+        pauseGame(state);
+        events.push('pause');
+        break;
+      }
       updatePlaying(state, actions, events);
       break;
     case 'are':
+      if (actions.pause) {
+        pauseGame(state);
+        events.push('pause');
+        break;
+      }
       state.areTimer--;
       if (state.areTimer <= 0) {
         state.phase = 'playing';
@@ -281,6 +299,14 @@ export function update(state, actions, events) {
       }
       break;
   }
+}
+
+/** Pauses an in-progress game (playing or ARE). @returns {boolean} whether it paused */
+export function pauseGame(state) {
+  if (state.phase !== 'playing' && state.phase !== 'are') return false;
+  state.pausedFrom = state.phase;
+  state.phase = 'paused';
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +344,7 @@ function touchesMenu(from, to) {
 }
 
 /**
- * @returns {{ start(): void, stop(): void, getState(): object }}
+ * @returns {{ start(): void, stop(): void, pause(): boolean, getState(): object }}
  */
 export function createGame({
   input,
@@ -360,6 +386,18 @@ export function createGame({
       running = false;
       caf(rafId);
       clock.last = null;
+    },
+    /**
+     * External pause (tab hidden / window blur). Browsers stop rAF in hidden
+     * tabs, so the clock is re-anchored: the first frame back runs no catch-up
+     * steps. No-op outside playing / ARE.
+     */
+    pause() {
+      if (!pauseGame(state)) return false;
+      audio.play('pause');
+      input.reset();
+      clock.last = null;
+      return true;
     },
     getState: () => state,
   };

@@ -156,6 +156,7 @@ export const PALETTE = {
 };
 export const COLORS = {
   wellBg: '#000000', gridDot: '#1a1a2e', ghost: 'rgba(255,255,255,0.35)', flash: '#fcfcfc',
+  outline: 'rgba(0,0,0,0.5)', sheen: '#fcfcfc',
 };
 ```
 
@@ -310,7 +311,10 @@ export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }): Rendere
 
 // Internal but exported for testing/reuse:
 export function drawBlock(ctx, px, py, size, colorIndex, style = 'normal'): void; // 'normal' | 'ghost' | 'flash'
-export function buildBlockSprites(size): Map<number, HTMLCanvasElement>;           // pre-rendered per color
+export function buildBlockSprites(size, createCanvas?): Map<1..7 | 'ghost' | 'flash', Canvas>;
+export function previewOrigin(type, width, height, size): [number, number];      // centers a piece's cells
+// createRenderer(canvases, { createCanvas }) — offscreen canvas factory, injectable for Node tests
+// (defaults to OffscreenCanvas, falling back to <canvas>).
 ```
 
 Block look (16 px cell, 1 logical px = 1 canvas px):
@@ -323,18 +327,28 @@ rows 14-15 : `dark` shadow band (bottom + right edge)  │
 spec pixel : 2×2 white-ish at (3,3) for 16-bit sheen   ┘
 ```
 
+- Row/col 0 is the `COLORS.outline` seam on the top and left edges only, so
+  neighbouring blocks share a single 1px line. The top-right and bottom-left
+  bevel corners are split along the anti-diagonal. Bevel and sheen size are
+  `max(1, round(size / 8))`.
 - Blocks are pre-rendered once per color to offscreen canvases
   (`buildBlockSprites`) and blitted with `drawImage` — no per-frame gradients.
-- Ghost piece: outline-only (2px `COLORS.ghost` border) — no fill.
+  The well background (fill + grid dots) is also pre-rendered once.
+- Ghost piece: outline-only (2px `COLORS.ghost` border) — no fill — at
+  `active.y + dropDistance(board, active)`; skipped when the distance is 0.
+  `dropDistance` is allocation-free because it runs every frame.
 - Draw order: well background + grid dots → locked cells → ghost → active
-  piece → line-clear FX → (paused: nothing on board; overlay covers it).
+  piece → line-clear FX → (paused: empty well only, hold/next hidden too, so
+  the player can't plan during a pause; the overlay covers it).
 - Only rows `HIDDEN_ROWS..ROWS-1` are drawn; draw `y - HIDDEN_ROWS`. The active
   piece's hidden-row cells are clipped.
 - Line-clear FX: during `lineClear` phase, cleared rows flash white on even
   4-frame intervals and wipe from the center outward (NES-style), driven by
   `state.clearing.timer / LINE_CLEAR_FRAMES`.
-- Hold/Next canvases: pieces centered in their slot; hold is drawn dimmed
-  (globalAlpha 0.4) when `hold.used` is true.
+- Hold/Next canvases: pieces in spawn rotation, centered in their slot (hold
+  80×48; next 80×144 = three 48px slots, top to bottom); hold is drawn dimmed
+  (globalAlpha 0.4) when `hold.used` is true. Both are blank on the title
+  screen, because the title's bag isn't the one the new game deals from.
 - Redraw every rAF frame — the scene is tiny, dirty-tracking isn't worth it
   for the board. (HUD text in `ui.js` *is* dirty-tracked.)
 
@@ -353,7 +367,7 @@ Overlay content per phase:
 | phase      | title                    | sub                   |
 |------------|--------------------------|-----------------------|
 | `title`    | `TETRIS`                 | `LEVEL < 00 >` / `PRESS ENTER` |
-| `paused`   | `PAUSE`                  | `PRESS P`             |
+| `paused`   | `PAUSED`                 | `PRESS P TO RESUME`   |
 | `gameOver` | `GAME OVER`              | `SCORE 000000` / `PRESS ENTER` |
 | otherwise  | *(overlay hidden)*       |                       |
 
@@ -388,6 +402,7 @@ export function createGame({
 }): Game;
 export function createInitialState({ startLevel = 0, hiScore = 0, rng = Math.random } = {}): GameState;
 export function update(state, actions, events): void;   // one 60 Hz tick, pure w.r.t. DOM
+export function pauseGame(state): boolean;              // playing/are → paused; false otherwise
 
 // Fixed-timestep clock (pure; see §9)
 export function createClock(): { last: number | null, acc: number };
@@ -396,6 +411,7 @@ export function advanceClock(clock, nowMs, stepMs = STEP_MS, maxFrameMs = MAX_FR
 /** @typedef {Object} Game
  * @property {() => void} start   // begins rAF loop (title screen)
  * @property {() => void} stop
+ * @property {() => boolean} pause  // auto-pause (tab hidden / blur); re-anchors the clock (§9)
  * @property {() => GameState} getState
  */
 ```
@@ -571,8 +587,15 @@ function frame(now) {
   stay real-time: 59.94 Hz gets one double step every ~16 s, and 60.006 Hz gets
   one frame with no step. That's intended; don't "fix" it by locking to vsync.
 - `MAX_FRAME_MS = 250` caps catch-up at 15 steps after a stall.
-- `document.visibilitychange` → hidden: auto-pause if playing; on resume set
-  `clock.last = null` to avoid a catch-up burst.
+- Pause: P / Esc toggle `playing`/`are` ↔ `paused` inside `update()`, and
+  `pausedFrom` records which phase to return to. The `paused` phase advances
+  nothing except `state.frame`, so gravity, lock delay and ARE resume exactly
+  where they stopped. The pause keypress's own frame doesn't advance the game.
+- Auto-pause: `main.js` calls `game.pause()` on `visibilitychange` (hidden) and
+  `window` `blur`. It pauses only during `playing`/`are`, plays `'pause'`,
+  resets input and sets `clock.last = null`. Browsers stop rAF in hidden tabs,
+  so the first frame back only re-anchors the clock (no catch-up burst). The
+  game stays paused until the player presses P.
 - Input is polled **inside** the fixed step so DAS timing is frame-exact
   regardless of monitor refresh rate (60/120/144 Hz behave identically).
   At 144 Hz most rAF callbacks run 0 steps; edges simply wait in `pressed`.

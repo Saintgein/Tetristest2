@@ -61,6 +61,12 @@ const game = createGame({
 
 game.start();
 
+// Auto-pause when the player leaves: tab hidden, window minimized or unfocused.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) game.pause();
+});
+window.addEventListener('blur', () => game.pause());
+
 fitScale();
 window.addEventListener('resize', fitScale);
 // Web font metrics change the cabinet size once loaded

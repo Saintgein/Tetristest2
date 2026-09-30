@@ -57,4 +57,6 @@ export const COLORS = {
   gridDot: '#1a1a2e',
   ghost: 'rgba(255,255,255,0.35)',
   flash: '#fcfcfc',
+  outline: 'rgba(0,0,0,0.5)',   // 1px top/left block seam
+  sheen: '#fcfcfc',             // 2×2 highlight pixel
 };

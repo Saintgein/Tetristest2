@@ -6,7 +6,7 @@
 // ==========================================================================
 
 import { COLS, ROWS, HIDDEN_ROWS } from './config.js';
-import { getAbsoluteCells, TYPE_INDEX } from './pieces.js';
+import { getAbsoluteCells, getCells, TYPE_INDEX } from './pieces.js';
 
 /** @typedef {import('./pieces.js').Piece} Piece */
 /** @typedef {{ cols: number, rows: number, cells: Uint8Array[] }} Board */
@@ -69,13 +69,19 @@ export function isLockOut(piece) {
   return getAbsoluteCells(piece).every(([, y]) => y < HIDDEN_ROWS);
 }
 
-/** @returns {number} rows the piece can fall before colliding (ghost / hard drop). */
+/**
+ * Rows the piece can fall before colliding (ghost / hard drop).
+ * Called by the renderer every frame, so it doesn't allocate or touch `piece`.
+ * @returns {number}
+ */
 export function dropDistance(board, piece) {
-  let distance = 0;
-  const probe = { ...piece };
-  for (;;) {
-    probe.y = piece.y + distance + 1;
-    if (!isValidPosition(board, probe)) return distance;
-    distance++;
+  const shape = getCells(piece.type, piece.rotation);
+  for (let distance = 0; ; distance++) {
+    const top = piece.y + distance + 1;
+    for (let i = 0; i < shape.length; i++) {
+      const x = piece.x + shape[i][0];
+      const y = top + shape[i][1];
+      if (!inBounds(board, x, y) || board.cells[y][x] !== 0) return distance;
+    }
   }
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createInitialState, update, createClock, advanceClock, createGame,
+  createInitialState, update, createClock, advanceClock, createGame, pauseGame,
 } from '../src/game.js';
 import { emptyActions } from '../src/input.js';
 import { spawnPiece, getAbsoluteCells, TYPE_INDEX, PIECE_TYPES } from '../src/pieces.js';
@@ -1168,4 +1168,192 @@ test('ghost: dropDistance leaves the piece untouched and matches brute force', (
   state.active = { ...piece };
   assert.equal(d, dropDistanceOf(state));
   assert.equal(piece.y + d, 13, 'stops on the overhang, not in the cave below');
+});
+
+// ===========================================================================
+// Pause
+// ===========================================================================
+
+test('pause: P during play → paused with a pause event; P again resumes', () => {
+  const state = started();
+  assert.deepEqual(run(state, 1, A({ pause: true })), ['pause']);
+  assert.equal(state.phase, 'paused');
+  assert.equal(state.pausedFrom, 'playing');
+  assert.deepEqual(run(state, 1, A({ pause: true })), ['pause']);
+  assert.equal(state.phase, 'playing');
+  assert.equal(state.pausedFrom, null);
+});
+
+test('pause: the pause frame itself does not advance the game', () => {
+  const state = started({ level: 29 });      // 1 row per frame, so any tick would show
+  const y = state.active.y;
+  run(state, 1, A({ pause: true, shift: 1, hardDrop: true }));
+  assert.equal(state.active.y, y);
+  assert.equal(state.active.x, 3);
+  assert.equal(state.stats.pieces, 0);
+});
+
+test('pause: gravity is frozen and resumes from the same accumulator', () => {
+  const state = started({ level: 0 });
+  run(state, 30);                             // 30/48 of a row
+  const { y } = state.active;
+  const acc = state.gravityAcc;
+  run(state, 1, A({ pause: true }));
+  run(state, 600);                            // 10 s paused
+  assert.equal(state.active.y, y);
+  assert.equal(state.gravityAcc, acc);
+  run(state, 1, A({ pause: true }));          // resume (no gravity on this frame)
+  run(state, 17);
+  assert.equal(state.active.y, y, 'still 1/48 short');
+  run(state, 1);
+  assert.equal(state.active.y, y + 1, 'row lands on frame 48 of play time');
+});
+
+test('pause: lock delay timer is frozen', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  run(state, 20);
+  run(state, 1, A({ pause: true }));
+  run(state, 300);
+  assert.equal(state.lock.timer, 20);
+  assert.equal(state.stats.pieces, 0);
+  run(state, 1, A({ pause: true }));
+  run(state, 9);
+  assert.equal(state.stats.pieces, 0);
+  run(state, 1);
+  assert.equal(state.stats.pieces, 1, 'locks after the remaining 10 frames');
+});
+
+test('pause: works during ARE and resumes into ARE with the remaining time', () => {
+  const state = started();
+  run(state, 1, A({ hardDrop: true }));
+  run(state, 2);                              // 2 of 6 ARE frames
+  run(state, 1, A({ pause: true }));
+  assert.equal(state.pausedFrom, 'are');
+  run(state, 100);
+  assert.equal(state.active, null);
+  run(state, 1, A({ pause: true }));
+  assert.equal(state.phase, 'are');
+  run(state, ARE_FRAMES - 3);
+  assert.equal(state.phase, 'are');
+  run(state, 1);
+  assert.equal(state.phase, 'playing');
+});
+
+test('pause: gameplay input and Enter are ignored while paused', () => {
+  const state = started();
+  run(state, 1, A({ pause: true }));
+  const snapshot = JSON.stringify({ active: state.active, hold: state.hold, score: state.score });
+  run(state, 30, A({ hardDrop: true, softDrop: true, shift: -1, shiftToWall: true, rotate: 1, hold: true, start: true }));
+  assert.equal(state.phase, 'paused');
+  assert.equal(JSON.stringify({ active: state.active, hold: state.hold, score: state.score }), snapshot);
+});
+
+test('pause: frame counter keeps running (drives the blinking prompt)', () => {
+  const state = started();
+  run(state, 1, A({ pause: true }));
+  const frame = state.frame;
+  run(state, 10);
+  assert.equal(state.frame, frame + 10);
+});
+
+test('pause: ignored on the title screen and at game over', () => {
+  const title = createInitialState({ rng: seeded(1) });
+  assert.deepEqual(run(title, 1, A({ pause: true })), []);
+  assert.equal(title.phase, 'title');
+
+  const over = started();
+  over.board.cells[1][4] = 1;
+  run(over, 1, A({ hardDrop: true }));
+  settle(over);
+  assert.equal(over.phase, 'gameOver');
+  assert.deepEqual(run(over, 1, A({ pause: true })), []);
+  assert.equal(over.phase, 'gameOver');
+});
+
+test('pauseGame: only pauses playing / ARE', () => {
+  for (const phase of ['title', 'gameOver', 'paused']) {
+    const state = createInitialState();
+    state.phase = phase;
+    assert.equal(pauseGame(state), false, phase);
+    assert.equal(state.phase, phase);
+  }
+  const state = started();
+  assert.equal(pauseGame(state), true);
+  assert.deepEqual([state.phase, state.pausedFrom], ['paused', 'playing']);
+});
+
+// ---------- loop integration ----------
+
+test('loop: P pauses and resumes; input is reset on both transitions', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  const resets = h.input.resets;
+  h.input.queue.push(A({ pause: true }));
+  h.frame();
+  assert.equal(h.state.phase, 'paused');
+  assert.equal(h.input.resets, resets + 1);
+  h.input.queue.push(A({ pause: true }));
+  h.frame();
+  assert.equal(h.state.phase, 'playing');
+  assert.equal(h.input.resets, resets + 2);
+  assert.deepEqual(h.audio.played, ['pause', 'pause']);
+});
+
+test('loop: game.pause() pauses play, resets input, plays the pause sound', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  const resets = h.input.resets;
+  assert.equal(h.game.pause(), true);
+  assert.equal(h.state.phase, 'paused');
+  assert.equal(h.input.resets, resets + 1);
+  assert.deepEqual(h.audio.played, ['pause']);
+  assert.equal(h.game.pause(), false, 'already paused');
+  assert.deepEqual(h.audio.played, ['pause']);
+});
+
+test('loop: game.pause() is a no-op on the title screen', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  assert.equal(h.game.pause(), false);
+  assert.equal(h.state.phase, 'title');
+  assert.equal(h.input.resets, 0);
+});
+
+test('loop: coming back after game.pause() runs no catch-up burst', () => {
+  const h = loopHarness({ level: 29 });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  h.game.pause();                             // tab hidden: rAF stops firing
+  const frame = h.state.frame;
+  h.frame(30_000);                            // first callback after 30 s away
+  assert.equal(h.state.frame, frame, 'first frame back only re-anchors the clock');
+  h.frame();
+  assert.equal(h.state.frame, frame + 1);
+  assert.equal(h.state.phase, 'paused', 'still waiting for the player');
+});
+
+test('loop: resuming continues at normal speed', () => {
+  const h = loopHarness({ level: 29 });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  h.input.queue.push(A({ pause: true }));
+  h.frame();
+  for (let i = 0; i < 120; i++) h.frame();   // 2 s paused
+  const y = h.state.active.y;
+  h.input.queue.push(A({ pause: true }));
+  h.frame();                                  // resume frame
+  for (let i = 0; i < 5; i++) h.frame();
+  assert.equal(h.state.active.y, y + 5, '1 row per frame, no burst');
 });

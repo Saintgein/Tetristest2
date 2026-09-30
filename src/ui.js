@@ -7,6 +7,7 @@
 /** Overlay text per phase; phases not listed hide the overlay. */
 const OVERLAY = {
   title:    { title: 'TETRIS',    sub: 'PRESS ENTER' },
+  paused:   { title: 'PAUSED',    sub: 'PRESS P TO RESUME' },
   gameOver: { title: 'GAME OVER', sub: 'PRESS ENTER' },
 };
 

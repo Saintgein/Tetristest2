@@ -283,7 +283,7 @@ manual check.
 
 ---
 
-## Milestone 3 — Controls feel: lock delay, hold, ghost, ARE, pause
+## Milestone 3 — Controls feel: lock delay, hold, ghost, ARE, pause ✅
 
 Goal: modern handling on top of M2's movement core (DAS, SRS kicks and hard
 drop already landed in M2).
@@ -305,13 +305,18 @@ Core logic (done — 155 tests; NES scoring pulled forward from M4):
 - [x] Tests: lock delay expiry, reset cap, airborne timer, `lowestY` refresh, hold,
       ARE, scoring, next queue / 7-bag, ghost == hard-drop landing (fuzzed), HUD
 
-Remaining:
+Rendering (done — pixel tests on a fake canvas + 13/13 headless-Firefox checks):
 
-- [ ] `paused` phase (P / Esc), auto-pause on `visibilitychange` + `clock.last = null`
-- [ ] `renderer.js` → SPEC §6.5: `buildBlockSprites` cache, `drawBlock(ctx, px, py,
-      size, colorIndex, style)` with outline + sheen pixel, ghost (outline),
-      hold canvas (dimmed when used), next canvas (3 slots)
-- [ ] `ui.js`: `paused` overlay
+- [x] `renderer.js` → SPEC §6.5: `buildBlockSprites` cache, `drawBlock(ctx, px, py,
+      size, colorIndex, style)` with outline + mitered bevel + sheen pixel, ghost
+      (outline), hold canvas (dimmed when used), next canvas (3 slots)
+
+Pause (done — 17 unit tests + 13/13 headless-Firefox checks):
+
+- [x] `paused` phase (P / Esc) from `playing` or `are`; timers frozen, resumes exactly
+- [x] Auto-pause on `visibilitychange` (hidden) and window `blur` via `game.pause()`,
+      which re-anchors the clock (`clock.last = null`) so there's no catch-up burst
+- [x] `ui.js`: `PAUSED` / `PRESS P TO RESUME` overlay; renderer hides stack + previews
 
 **AC:** Piece can slide on the floor ~0.5 s before locking and can't stall
 forever (15 resets); hold swaps once per piece; ghost always matches hard-drop
