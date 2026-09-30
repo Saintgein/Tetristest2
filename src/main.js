@@ -91,6 +91,21 @@ window.addEventListener('click', unlockAudio, { capture: true });
 window.addEventListener('touchstart', unlockAudio, { capture: true, passive: true });
 window.addEventListener('touchend', unlockAudio, { capture: true, passive: true });
 
+// Gamepads are polled from rAF, which carries no user activation: the browser keeps a
+// context created or resumed there suspended (the rejection is swallowed in audio.js and
+// never touches the sound / music settings). The gesture listeners above then finish the
+// job on the next key, click or tap; until then the well shows "CLICK ANYWHERE TO ENABLE
+// SOUND". Focus changes aren't user activation, so they can't unlock audio.
+let pendingAudioUnlock = false;
+const unlockAudioFromGamepad = () => {
+  audio.unlock();
+  if (audio.state === 'suspended') pendingAudioUnlock = true;
+};
+const audioNeedsGesture = () => {
+  if (pendingAudioUnlock && audio.state !== 'suspended') pendingAudioUnlock = false;
+  return pendingAudioUnlock && !audio.muted;
+};
+
 // Gamepad detection and connection lifecycle
 let connectedGamepads = 0;
 function countGamepads() {
@@ -113,7 +128,7 @@ const hasGamepad = () => connectedGamepads > 0 || countGamepads() > 0;
 window.addEventListener('gamepadconnected', () => {
   connectedGamepads++;
   root.classList.add('has-gamepad');
-  unlockAudio();
+  unlockAudioFromGamepad();
 });
 
 window.addEventListener('gamepaddisconnected', () => {
@@ -129,7 +144,7 @@ if (hasGamepad()) {
 
 const input = createInput(window, undefined, undefined, {
   touchRoot: $('touch-controls'),
-  onGamepadButton: unlockAudio,
+  onGamepadButton: unlockAudioFromGamepad,
   onUserGesture: unlockAudio,
 });
 
@@ -152,7 +167,8 @@ const game = createGame({
     well: $('well'),
     sound: $('hud-sound'),
     music: $('hud-music'),
-  }, { reducedMotion, hasGamepad }),
+    soundHint: $('sound-hint'),
+  }, { reducedMotion, hasGamepad, audioNeedsGesture }),
   audio,
   storage,
   initialState: createInitialState({ startLevel }),

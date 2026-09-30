@@ -281,3 +281,23 @@ test('UI update: dynamically switches title prompt when controller connects/disc
   ui.update(baseState({ phase: 'title' }));
   assert.equal(els.overlaySub.textContent, TITLE_PROMPT);
 });
+
+test('UI update: sound hint shows while audio waits for a gesture, DOM touched only on change', () => {
+  let needsGesture = false;
+  const soundHint = fakeElement();
+  let hiddenWrites = 0;
+  let hidden = true;
+  Object.defineProperty(soundHint, 'hidden', { get: () => hidden, set: (v) => { hidden = v; hiddenWrites++; } });
+  const ui = createUI({ ...setup().els, soundHint }, { audioNeedsGesture: () => needsGesture });
+
+  ui.update(baseState());
+  assert.equal(soundHint.hidden, true);
+  needsGesture = true;
+  ui.update(baseState());
+  ui.update(baseState());
+  assert.equal(soundHint.hidden, false);
+  assert.equal(hiddenWrites, 2, 'written once per change');
+  needsGesture = false;
+  ui.update(baseState());
+  assert.equal(soundHint.hidden, true);
+});

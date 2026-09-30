@@ -1039,6 +1039,22 @@ test('gamepad: onGamepadButton callback fires on rising edge for audio unlock', 
   assert.equal(buttonPresses, 2);
 });
 
+test('gamepad: a polled button press is not reported as a DOM user gesture', () => {
+  let gestures = 0;
+  let buttonPresses = 0;
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, {
+    getGamepads: () => pads,
+    onGamepadButton: () => { buttonPresses++; },
+    onUserGesture: () => { gestures++; },
+  });
+  input.poll();
+  pads = [fakeGamepad({ buttons: { 9: true } })];
+  input.poll();
+  assert.equal(buttonPresses, 1);
+  assert.equal(gestures, 0, 'rAF polling carries no user activation');
+});
+
 test('gamepad: reset() clears all gamepad state and cancels held inputs', () => {
   let pads = [fakeGamepad({ buttons: { 13: true, 14: true } })];
   const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });

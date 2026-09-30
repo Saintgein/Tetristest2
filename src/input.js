@@ -102,8 +102,10 @@ const NON_START_TARGETS = 'button, a, input, select, textarea, [data-no-start]';
  *        pointerStart: a primary click/tap anywhere (except controls) presses Start;
  *        touchRoot: container element with [data-action] virtual buttons;
  *        getGamepads: accessor returning gamepads list (defaults to navigator.getGamepads);
- *        onGamepadButton: callback fired on controller button press (used for audio unlock);
- *        onUserGesture: callback fired on any user input gesture (used for audio unlock)
+ *        onGamepadButton: callback fired on controller button press, from poll() (rAF): browsers
+ *                         grant no user activation there, so audio may stay suspended;
+ *        onUserGesture: callback fired on DOM input gestures (key, pointer), which do grant
+ *                       user activation (used for audio unlock)
  * @returns {{ poll(): Actions, press(action: string): void, reset(): void, destroy(): void, bindTouch(element: Element): void }}
  */
 export function createInput(
@@ -530,11 +532,9 @@ export function createInput(
     }
 
     if (anyGamepadButtonDown && !gamepadButtonWasDown) {
+      // Not onUserGesture: a polled button press is not a DOM gesture (no user activation)
       if (typeof onGamepadButton === 'function') {
         onGamepadButton();
-      }
-      if (typeof onUserGesture === 'function') {
-        onUserGesture();
       }
     }
     gamepadButtonWasDown = anyGamepadButtonDown;

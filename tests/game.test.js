@@ -1998,7 +1998,7 @@ function resilientHarness(overrides = {}) {
   const renderer = overrides.renderer ?? h.renderer;
   const ui = overrides.ui ?? h.ui;
   const game = createGame({
-    input: h.input, renderer, ui, audio, storage: null,
+    input: h.input, renderer, ui, audio, storage: overrides.storage ?? null,
     initialState: createInitialState({ rng: seeded(5) }),
     onError: (where, err) => errors.push([where, String(err.message ?? err)]),
     raf: clock.raf, caf: clock.caf,
@@ -2171,6 +2171,34 @@ test('createGame: suspended AudioContext is resumed on any gameplay action', () 
   h.frame();
   assert.equal(resumes > 0, true, 'AudioContext.resume() called on action');
   assert.equal(mockCtx.state, 'running');
+});
+
+test('createGame: a blocked resume (gamepad start, no user activation) never touches sound settings or storage', () => {
+  const storage = fakeStorage();
+  let resumes = 0;
+  const settings = [];
+  let musicWanted = false;
+  const h = resilientHarness({
+    storage,
+    audio: {
+      state: 'suspended',
+      resume() { resumes++; throw new DOMException('blocked', 'NotAllowedError'); },
+      setMuted(m) { settings.push(['muted', m]); },
+      setMusicEnabled(on) { settings.push(['music', on]); },
+      setMusicActive(on) { musicWanted = on; },
+    },
+  });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  for (let i = 0; i < 5; i++) h.frame();
+  assert.equal(h.state.phase, 'playing', 'the game starts regardless');
+  assert.ok(resumes > 0);
+  assert.deepEqual(settings, [['muted', false], ['music', true]], 'only the load-time defaults, never flipped');
+  assert.equal(musicWanted, true, 'BGM requested; it sounds once a gesture resumes the context');
+  assert.deepEqual([...storage.data.keys()], [START_LEVEL_KEY], 'no sound / music keys written');
+  assert.deepEqual(h.errors, [['audio', 'blocked']], 'reported once');
 });
 
 test('game loop with createInput: holding pause key across multiple frames toggles pause exactly once', () => {

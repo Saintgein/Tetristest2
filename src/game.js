@@ -559,6 +559,22 @@ export function createGame({
     saveValue(storage, BGM_KEY, on ? 1 : 0);
     return on;
   }
+
+  /**
+   * Resumes a suspended context. audio.resume() swallows the NotAllowedError a browser
+   * raises without user activation (e.g. a gamepad start polled from rAF): the context
+   * just stays suspended until the next DOM gesture, and the sound / music settings and
+   * their storage are never touched.
+   */
+  function resumeAudio() {
+    if (audio.state !== 'suspended') return;
+    try {
+      audio.resume?.();
+    } catch (err) {
+      report('audio', err);
+    }
+  }
+
   const clock = createClock();
   const events = [];
   let running = false;
@@ -599,14 +615,7 @@ export function createGame({
         actions.hold ||
         actions.pause;
 
-      if (hasAction) {
-        const audioCtx = audio.context ?? audio.ctx;
-        if (audioCtx && audioCtx.state === 'suspended') {
-          try { audioCtx.resume?.(); } catch { /* ignore */ }
-        } else if (typeof audio.resume === 'function' && audio.state === 'suspended') {
-          try { audio.resume(); } catch { /* ignore */ }
-        }
-      }
+      if (hasAction) resumeAudio();
 
       update(state, actions, events);
       try {
@@ -620,12 +629,7 @@ export function createGame({
       }
       if (prevPhase === 'title' && state.phase === 'playing') {
         saveValue(storage, START_LEVEL_KEY, state.startLevel);
-        const audioCtx = audio.context ?? audio.ctx;
-        if (audioCtx && audioCtx.state === 'suspended') {
-          try { audioCtx.resume?.(); } catch { /* ignore */ }
-        } else if (typeof audio.resume === 'function' && audio.state === 'suspended') {
-          try { audio.resume(); } catch { /* ignore */ }
-        }
+        resumeAudio();
         try {
           audio.restartMusic?.();                 // every new game starts at bar 1
         } catch (err) {

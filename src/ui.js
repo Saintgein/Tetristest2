@@ -50,10 +50,11 @@ export function overlayContent(state, options = false) {
 export const isLevelUpFlashOn = (state) => state.levelUpFlash > 0 && Math.floor(state.levelUpFlash / 4) % 2 === 1;
 
 /**
- * @param {{ score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo?, well? }} elements
- * @param {{ reducedMotion?: () => boolean, hasGamepad?: () => boolean }} [options]
+ * @param {{ score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo?, well?, soundHint? }} elements
+ * @param {{ reducedMotion?: () => boolean, hasGamepad?: () => boolean, audioNeedsGesture?: () => boolean }} [options]
  *        reducedMotion: disables the level-up flash;
- *        hasGamepad: indicates if a gamepad is currently connected
+ *        hasGamepad: indicates if a gamepad is currently connected;
+ *        audioNeedsGesture: audio is waiting for a click / key press (shows soundHint)
  * @returns {{ update(state: object): void, setMuted(muted: boolean): void, setMusic(on: boolean): void }}
  *
  * update() runs every frame and must not allocate during play, so numbers are
@@ -61,14 +62,15 @@ export const isLevelUpFlashOn = (state) => state.levelUpFlash > 0 && Math.floor(
  * menu phases.
  */
 export function createUI(
-  { score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well, sound, music },
-  { reducedMotion = () => false, hasGamepad = () => false } = {},
+  { score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well, sound, music, soundHint },
+  { reducedMotion = () => false, hasGamepad = () => false, audioNeedsGesture = () => false } = {},
 ) {
   const shownNumbers = new Map();              // element → last number shown
   const shownText = new Map();                 // element → last text written
   let overlayHidden = null;
   let infoHidden = null;
   let wellFlash = null;
+  let hintShown = null;
 
   function setNumber(el, value, digits) {
     if (!el || shownNumbers.get(el) === value) return;
@@ -112,6 +114,9 @@ export function createUI(
 
       const flash = !reducedMotion() && isLevelUpFlashOn(state);
       if (well && flash !== wellFlash) { well.classList.toggle('well--flash', flash); wellFlash = flash; }
+
+      const hint = audioNeedsGesture();
+      if (soundHint && hint !== hintShown) { soundHint.hidden = !hint; hintShown = hint; }
     },
 
     /** Footer SOUND toggle button ("SOUND: ON" / "SOUND: OFF"). */

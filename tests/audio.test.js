@@ -213,6 +213,41 @@ test('unlock: creates one context and resumes it; repeat calls only resume if su
   assert.equal(ctx.resumes, 2);
 });
 
+test('unlock without user activation (gamepad poll): rejected resume stays silent, settings untouched, next gesture plays', async () => {
+  const { FakeAudioContext } = createFakeContextClass();
+  let activated = false;
+  class BlockedContext extends FakeAudioContext {
+    resume() {
+      this.resumes++;
+      if (!activated) return Promise.reject(new DOMException('blocked', 'NotAllowedError'));
+      this.state = 'running';
+      return Promise.resolve();
+    }
+  }
+  const rejections = [];
+  const onRejection = (err) => rejections.push(err);
+  process.on('unhandledRejection', onRejection);
+  try {
+    const audio = createAudio({ AudioContext: BlockedContext });
+    audio.unlock();                              // gamepad Start, polled from rAF
+    audio.setMusicActive(true);                  // the game started anyway
+    audio.resume();
+    audio.play('move');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(rejections, [], 'every rejection is handled');
+    assert.equal(audio.state, 'suspended');
+    assert.equal(audio.muted, false, 'sound setting untouched');
+    assert.equal(audio.musicEnabled, true, 'music setting untouched');
+
+    activated = true;                            // the next click / key press
+    audio.unlock();
+    assert.equal(audio.state, 'running');
+    assert.equal(audio.musicPlaying, true, 'BGM runs without touching the toggles');
+  } finally {
+    process.off('unhandledRejection', onRejection);
+  }
+});
+
 test('unlock: a constructor that throws leaves audio silent, not broken', () => {
   const audio = createAudio({ AudioContext: class { constructor() { throw new Error('NotAllowedError'); } } });
   audio.unlock();
