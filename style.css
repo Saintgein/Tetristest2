@@ -250,8 +250,14 @@ h1, h2, p, dl, dd, ul {
     radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.55) 100%);
 }
 
+/* Reduced motion: no blinking. main.js also sets .reduced-motion on <html> (OS setting
+   or ?reducedMotion), which ui.js/renderer.js use to drop the flashes and line wipe. */
 @media (prefers-reduced-motion: reduce) {
   .blink {
     animation: none;
   }
+}
+
+.reduced-motion .blink {
+  animation: none;
 }

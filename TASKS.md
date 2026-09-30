@@ -364,29 +364,47 @@ awards 1200 ✅; high score survives a page reload ✅ (browser-verified).
 
 ---
 
-## Milestone 5 — Audio, polish & release
+## Milestone 5 — Audio, accessibility, performance & docs ✅ (Chrome/Edge QA pending)
 
 Goal: ship-quality feel and robustness.
 
-**Files:** `src/audio.js`, `src/main.js`, `src/renderer.js`, `style.css`, `index.html`
+**Files:** `src/audio.js`, `src/main.js`, `src/renderer.js`, `src/ui.js`, `src/game.js`,
+`src/input.js`, `src/board.js`, `src/pieces.js`, `style.css`, `index.html`, `README.md`
 
-- [ ] `audio.js` (SPEC §6.7): `createAudio()` with `play`, `unlock`, `setMuted`
-  - [ ] Recipes: move, rotate, softDrop, hardDrop, lock, hold, clear, tetris,
-        levelUp, gameOver, pause (square/triangle + noise burst for hard drop)
-  - [ ] Unlock on first keydown; M toggles mute (persisted)
-  - [ ] Safe no-op when Web Audio is unavailable
+Verified with `npm test` (281 tests; 19/20 deliberate bugs caught, and the
+survivor is behaviour-equivalent) and headless Firefox: 21/21 audio/settings/perf
+checks, 7/7 with the real `prefers-reduced-motion` preference, 6/6 offline-font
+checks, and the M3/M4/pause checks still 13/13, 21/21 and 13/13.
+
+- [x] `audio.js` (SPEC §6.7): `createAudio()` with `play`, `unlock`, `setMuted`,
+      `toggleMute`, `setVolume`
+  - [x] 2A03 channels: pulse ×2 (8-step duty 12.5/25/50/75 %), 32-step triangle,
+        15-bit LFSR noise (long/short); hardware-style channel stealing
+  - [x] 13 recipes: move, rotate, softDrop, hardDrop, lock, hold, single, double,
+        triple, tetris (fanfare, all 4 channels), levelUp, gameOver, pause
+  - [x] Unlock on first keydown/pointerdown; M toggles mute in any phase (persisted,
+        footer shows SOUND ON/OFF)
+  - [x] Safe no-op when Web Audio is unavailable, locked or throws
+- [x] Game events: per-count clear cues; one-shot `softDrop` cue per soft drop
+- [x] Title screen attract details: blinking prompt, level selector arrows (M4)
+- [x] Settings persisted: mute, last start level (`?level` still overrides)
+- [x] `prefers-reduced-motion` (+ `?reducedMotion`): no blink, no level-up flash;
+      line clears cut instantly (no flash/wipe/wash) with identical game timing
+- [x] Graceful font fallback: verified with Google Fonts blocked (game fully playable)
+- [x] Performance pass: zero allocations in steady-state frames of the real loop
+      (`tests/perf.test.js`). Fixed: new `Actions` per poll, `getAbsoluteCells` in
+      collision, `Set` churn in input, `length = 0` on the events array, string
+      kick keys, preview-origin arrays, HUD re-formatting, closures in `ui.js`.
+      ~0.05 ms update+render per frame in Firefox.
+- [x] `README.md`: how to run, controls, testing, architecture, credits
+- [ ] Final QA in Chrome and Edge; real 144 Hz display *(only Firefox is installed here)*
 - [ ] Game-over animation: stack fills top-down with gray blocks (row per 4 frames)
-- [ ] Title screen attract details: blinking prompt, level selector arrows
-- [ ] Settings persisted: mute, last start level
-- [ ] `prefers-reduced-motion`: disable blink, flashes, and CRT flicker
-- [ ] Graceful font fallback check (block Google Fonts in DevTools)
-- [ ] Performance pass: no allocations in `render()` (Performance panel → no GC saw-tooth)
-- [ ] `README.md`: how to run, controls, credits
-- [ ] Final QA across Chrome, Firefox, Edge; 60 Hz and high-refresh
+      *(not in the M5 request; still open)*
 
-**AC:** Every action has a distinct retro sound; muting persists; no console
-errors; 60 fps sustained through level 99 at 20 G; game fully playable offline
-(with fallback font).
+**AC:** Every action has a distinct retro sound ✅ (13 distinct recipes, unit-tested
+and scheduled in-browser); muting persists ✅; no console errors ✅ (Firefox); game
+fully playable offline with the fallback font ✅. *60 fps at 20 G:* rAF cadence and
+frame cost pass in headless Firefox; still needs a human check on real hardware.
 
 ---
 

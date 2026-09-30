@@ -132,7 +132,9 @@ export const MAX_START_LEVEL = 19;
 export const SCORE_MILESTONE = 10_000;            // see §8.2
 export const LEVEL_UP_FLASH_FRAMES = 30;          // well-border flash after a level-up
 export const GAME_OVER_DELAY_FRAMES = 60;         // Enter ignored for 1 s on the game-over screen
-export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage key
+export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage keys
+export const MUTE_KEY = 'tetris.muted';           // '1' | '0'
+export const START_LEVEL_KEY = 'tetris.startLevel';
 
 export const KEY_BINDINGS = {
   left:      ['ArrowLeft', 'KeyA'],
@@ -299,14 +301,21 @@ Authentic NES timing is `DAS 16 / ARR 6`; that's a `config.js` change only.
 - A fresh press edge always restarts DAS, even if `das.dir` already matches.
 - `softDrop` is active if held or pressed this poll. `rotate`: CW edge → 1,
   else CCW edge → −1. `menuX` mirrors the horizontal press edges.
-- `poll()` clears `pressed` and returns a new `Actions` object.
+- `poll()` clears the press edges and returns **the same `Actions` object
+  every call**, overwritten in place (no per-frame allocation). Read it before
+  the next poll, and copy it (`{ ...actions }`) to keep a snapshot. Internally,
+  held/pressed state lives in preallocated per-action counters and flags, not
+  Sets: V8's `Set#add/delete/clear` reallocate their tables.
 - `target` `blur` → `reset()` so keys don't stick. `reset()` clears `held`,
   `pressed` and the DAS state.
 
 ### 6.5 `renderer.js`
 
 ```js
-export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }): Renderer;
+export function createRenderer(
+  { boardCanvas, holdCanvas, nextCanvas },
+  { createCanvas?, reducedMotion = () => false } = {},   // reducedMotion is read every frame
+): Renderer;
 
 /** @typedef {Object} Renderer
  * @property {(state: GameState) => void} render
@@ -362,7 +371,8 @@ spec pixel : 2×2 white-ish at (3,3) for 16-bit sheen   ┘
 ### 6.6 `ui.js`
 
 ```js
-export function createUI(elements): UI;
+export function createUI(elements, { reducedMotion = () => false } = {}): UI;
+// UI also has setMuted(muted): writes "SOUND ON" / "SOUND OFF" into elements.sound
 /** @typedef {Object} UI
  * @property {(state: GameState) => void} update   // writes HUD only when values change
  */
@@ -387,19 +397,45 @@ visible live. While `levelUpFlash > 0` the well frame toggles the
 ### 6.7 `audio.js`
 
 ```js
-export function createAudio(): Audio;
+export function createAudio({ AudioContext?, volume = 0.6, muted = false } = {}): Audio;
 /** @typedef {Object} Audio
  * @property {(name: SfxName) => void} play
- * @property {() => void} unlock        // resume AudioContext on first user gesture
+ * @property {() => void} unlock        // create/resume the AudioContext; call from a user gesture
  * @property {(muted: boolean) => void} setMuted
- * @property {boolean} muted
+ * @property {() => boolean} toggleMute // returns the new state
+ * @property {(v: number) => void} setVolume   // master volume, clamped 0–1
+ * @property {boolean} muted            // getter
+ * @property {boolean} ready            // getter: context exists
  */
-/** @typedef {'move'|'rotate'|'softDrop'|'hardDrop'|'lock'|'hold'|'clear'|'tetris'|'levelUp'|'gameOver'|'pause'} SfxName */
+/** @typedef {'move'|'rotate'|'softDrop'|'hardDrop'|'lock'|'hold'|'single'|'double'|'triple'|'tetris'|'levelUp'|'gameOver'|'pause'} SfxName */
+
+// Pure helpers, exported for tests:
+export const RECIPES, SFX_NAMES, CHANNELS, DUTY_STEPS, TRIANGLE_STEPS;
+export function stepWaveCoefficients(steps, harmonics = 48): { real, imag };  // → createPeriodicWave
+export function lfsrSequence(mode: 'long'|'short', length): Float32Array;       // ±1 samples
+export function noteFreq(midi): number;
 ```
 
-Each SFX is a tiny declarative recipe (wave, start/end freq, duration,
-volume envelope) played through a shared master `GainNode`. Must be a no-op
-(not throw) if Web Audio is unavailable or still locked.
+2A03-style engine:
+- **Channels:** `pulse1`, `pulse2`, `triangle`, `noise`, each with a gain into
+  one master gain. A new effect cuts whatever was scheduled on the channels it
+  uses (hardware-style channel stealing). Other channels keep playing.
+- **Waveforms:**
+  - Pulse duty cycles are the APU's 8-step sequences (12.5 / 25 / 50 / 75 %).
+  - The triangle is the 32-step 4-bit staircase.
+  - Both become `PeriodicWave`s through the exact Fourier series of a step
+    function.
+  - Noise is a looping buffer of the 15-bit LFSR: long mode taps bits 0⊕1
+    (period 32767), short mode taps 0⊕6 (period 93). `playbackRate` sets the
+    noise clock.
+- **Recipes:** each effect is a declarative note list: `{ ch, at, dur, note |
+  rate, to | toRate, vol, duty, mode, env: 'decay' | 'hold' }`.
+- **Autoplay:** no context exists until `unlock()`. `play()` before that, with
+  no Web Audio, or with unknown names is a silent no-op, and errors never
+  propagate to the game.
+- **Events:** clears emit `'single'`/`'double'`/`'triple'`/`'tetris'`.
+  `'softDrop'` fires once when a soft drop starts moving the piece
+  (`state.softDropping`), not on every row.
 
 ### 6.8 `game.js`
 
@@ -415,6 +451,12 @@ export function update(state, actions, events): void;   // one 60 Hz tick, pure 
 export function pauseGame(state): boolean;              // playing/lineClear/are → paused; false otherwise
 export function loadHiScore(storage): number;           // 0 if missing/invalid/unavailable
 export function saveHiScore(storage, score): boolean;   // never throws
+export function loadStartLevel(storage): number;        // 0..MAX_START_LEVEL, default 0
+export function loadMuted(storage): boolean;            // default false
+// createGame also: applies the stored mute setting at startup (audio.setMuted,
+// ui.setMuted); handles actions.mute in every phase via audio.toggleMute() and
+// saves it; saves startLevel on title → playing. main.js: ?level beats the
+// stored start level.
 
 // Fixed-timestep clock (pure; see §9)
 export function createClock(): { last: number | null, acc: number };
@@ -470,6 +512,7 @@ const state = {
   stats: { pieces: 0, singles: 0, doubles: 0, triples: 0, tetrises: 0 },
   levelUpFlash: 0,             // frames remaining for level-up FX
   gameOverTimer: 0,            // frames on the game-over screen (gates Enter)
+  softDropping: false,         // a soft drop is moving the piece (one-shot 'softDrop' cue)
   newHiScore: false,           // this game beat the previous top score
 };
 ```
@@ -653,7 +696,8 @@ playing:
 lockAndAdvance():
   lockPiece → lock-out check → hold.used = false → stats.pieces++
   rows = findFullRows; if rows.length → clearing = {rows, timer:0}, phase = 'lineClear',
-                                         push 'clear' / 'tetris' (sound on the first flash)
+                                         push 'single' / 'double' / 'triple' / 'tetris'
+                                         (sound on the first flash)
                        else recompute level (drop points can cross a milestone),
                             phase = 'are', areTimer = ARE_FRAMES
 ```
@@ -686,3 +730,29 @@ lockAndAdvance():
 - Manual QA checklist per milestone lives in TASKS.md.
 - Performance target: steady 60 fps, < 1 ms average update+render on a
   mid-range laptop; zero allocations in the hot render path (sprites cached).
+  Measured in Firefox: ~0.05 ms update+render per frame on a busy board.
+- **Allocation check (`tests/perf.test.js`):**
+  - It drives the real `createGame` loop with real input (DAS, rotation), the
+    renderer and UI with no-op canvases, and a fake rAF.
+  - It measures heap growth over N and 2N frames. Growth must not scale with
+    frame count (|marginal| < 0.75 B/frame): one object per frame would be
+    ≥ 16 B. A probe test proves the harness detects that.
+  - The only accepted cost is formatting a HUD number when it changes (the
+    DOM needs a string), about 130 B per score change, asserted < 256 B.
+  - Harness timestamps are integers held in an object field. A double kept in
+    a closure variable would itself box a 16-byte HeapNumber per frame.
+- **Hot-path rules this enforces:**
+  - Reuse objects: the `Actions` object, the events array, and scratch
+    objects for animation state.
+  - Clear the events array with `pop()`, not `length = 0`, which frees its
+    backing store.
+  - Don't call `Set#clear()` in the hot path; it allocates even when the set
+    is empty.
+  - No per-frame string keys, template strings, destructuring iterators or
+    closures.
+  - Collision reads cached shapes (`getCells`), never `getAbsoluteCells`.
+- **Reduced motion** (`prefers-reduced-motion` or `?reducedMotion`):
+  - no blinking prompt and no level-up flash;
+  - cleared rows are cut instantly, with no flash, wipe or tetris wash.
+  - The `lineClear` phase keeps its normal length, so game timing (and
+    difficulty) is identical either way.

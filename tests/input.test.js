@@ -253,18 +253,28 @@ test('menuX: horizontal press edges only', () => {
 test('shiftToWall: only with ARR 0, and only once charged', () => {
   const instant = setup({ dasFrames: 10, arrFrames: 0 });
   instant.down('ArrowLeft');
-  const polls = Array.from({ length: 12 }, () => instant.input.poll());
+  const polls = Array.from({ length: 12 }, () => ({ ...instant.input.poll() }));   // poll() reuses one object
   assert.deepEqual(polls.map((a) => a.shiftToWall),
     [false, false, false, false, false, false, false, false, false, false, true, true]);
   assert.equal(polls[0].shift, -1);
 
   const normal = setup();
   normal.down('ArrowLeft');
-  assert.ok(Array.from({ length: 30 }, () => normal.input.poll()).every((a) => !a.shiftToWall));
+  assert.ok(Array.from({ length: 30 }, () => ({ ...normal.input.poll() })).every((a) => !a.shiftToWall));
 });
 
 test('custom timing is honored', () => {
   const { down, shifts } = setup({ dasFrames: 16, arrFrames: 6 });
   down('ArrowRight');
   assert.deepEqual(shifts(30).map(([i]) => i), [0, 16, 22, 28]);
+});
+
+test('poll() reuses one Actions object (no per-frame allocation)', () => {
+  const { input, down } = setup();
+  const first = input.poll();
+  down('Space');
+  const second = input.poll();
+  assert.equal(second, first, 'same object');
+  assert.equal(second.hardDrop, true, 'overwritten with this frame');
+  assert.equal(input.poll().hardDrop, false);
 });

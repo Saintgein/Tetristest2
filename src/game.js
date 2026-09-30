@@ -7,7 +7,7 @@
 
 import {
   NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES,
-  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY,
+  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY, MUTE_KEY, START_LEVEL_KEY,
 } from './config.js';
 import {
   createBoard, isValidPosition, lockPiece, findFullRows, clearRows, isLockOut, dropDistance,
@@ -25,6 +25,7 @@ const CLOCK_SLOP_MS = 0.5;
 const MENU_PHASES = new Set(['title', 'paused', 'gameOver']);
 
 const CLEAR_STATS = [null, 'singles', 'doubles', 'triples', 'tetrises'];
+const CLEAR_EVENTS = [null, 'single', 'double', 'triple', 'tetris'];   // one sound each
 
 // ---------------------------------------------------------------------------
 // State
@@ -58,6 +59,7 @@ export function createInitialState({ startLevel = 0, hiScore = 0, rng = Math.ran
     stats: { pieces: 0, singles: 0, doubles: 0, triples: 0, tetrises: 0 },
     levelUpFlash: 0,
     gameOverTimer: 0,            // frames spent on the game-over screen
+    softDropping: false,         // a soft drop is moving the piece (for its one-shot sound)
     newHiScore: false,           // this game beat the previous top score
   };
 }
@@ -90,6 +92,7 @@ function spawnNext(state, events) {
 function spawnType(state, type, events) {
   state.active = spawnPiece(type);
   state.gravityAcc = 0;
+  state.softDropping = false;
   if (!isValidPosition(state.board, state.active)) {
     gameOver(state, events);                      // block out
     return false;
@@ -153,10 +156,11 @@ function tryRotate(state, dir) {
   const piece = state.active;
   const { rotation: from, x, y } = piece;
   const to = (from + dir + 4) % 4;
-  for (const [kx, ky] of getKicks(piece.type, from, to)) {
+  const kicks = getKicks(piece.type, from, to);
+  for (let i = 0; i < kicks.length; i++) {          // indexed: no iterator allocation
     piece.rotation = to;
-    piece.x = x + kx;
-    piece.y = y + ky;
+    piece.x = x + kicks[i][0];
+    piece.y = y + kicks[i][1];
     if (isValidPosition(state.board, piece)) return true;
   }
   piece.rotation = from;
@@ -183,7 +187,7 @@ function lockAndAdvance(state, events) {
     // Rows stay on the board and flash/wipe first; they collapse when the animation ends.
     state.clearing = { rows, timer: 0 };
     state.phase = 'lineClear';
-    events.push(rows.length === 4 ? 'tetris' : 'clear');
+    events.push(CLEAR_EVENTS[rows.length]);
     return;
   }
   applyLevel(state, events);                      // drop points can cross a score milestone
@@ -267,6 +271,7 @@ function updatePlaying(state, actions, events) {
   }
 
   // Gravity
+  if (!actions.softDrop) state.softDropping = false;
   let g = getGravity(state.level);
   if (actions.softDrop) g = Math.max(g, SOFT_DROP_G);
   state.gravityAcc += g;
@@ -276,7 +281,13 @@ function updatePlaying(state, actions, events) {
       state.gravityAcc = 0;
       break;
     }
-    if (actions.softDrop) state.score += SOFT_DROP_POINTS;
+    if (actions.softDrop) {
+      state.score += SOFT_DROP_POINTS;
+      if (!state.softDropping) {                  // one cue per soft drop, not one per row
+        state.softDropping = true;
+        events.push('softDrop');
+      }
+    }
     if (state.active.y > lock.lowestY) {          // new lowest row restores the reset budget
       lock.lowestY = state.active.y;
       lock.resets = 0;
@@ -368,30 +379,50 @@ export function pauseGame(state) {
 }
 
 // ---------------------------------------------------------------------------
-// High score persistence (SPEC §8.4)
+// Persistence: top score and settings (SPEC §8.4)
 // ---------------------------------------------------------------------------
 
-/** @returns {number} stored top score, or 0 if missing, invalid or storage is unavailable. */
-export function loadHiScore(storage) {
+/** Non-negative integer stored under `key`, or null if missing/invalid/unavailable. */
+function loadInt(storage, key) {
   try {
-    const raw = storage?.getItem(HI_SCORE_KEY) ?? '';
-    if (!/^\d+$/.test(raw)) return 0;             // parseInt would accept '12abc' or '1e999'
+    const raw = storage?.getItem(key) ?? '';
+    if (!/^\d+$/.test(raw)) return null;          // parseInt would accept '12abc' or '1e999'
     const value = Number(raw);
-    return Number.isSafeInteger(value) ? value : 0;
+    return Number.isSafeInteger(value) ? value : null;
   } catch {
-    return 0;                                     // e.g. storage blocked by privacy settings
+    return null;                                  // e.g. storage blocked by privacy settings
   }
 }
 
 /** @returns {boolean} whether it was written */
-export function saveHiScore(storage, score) {
+function saveValue(storage, key, value) {
   try {
     if (!storage) return false;
-    storage.setItem(HI_SCORE_KEY, String(score));
+    storage.setItem(key, String(value));
     return true;
   } catch {
     return false;                                 // quota / privacy mode: keep playing
   }
+}
+
+/** @returns {number} stored top score, or 0 if missing, invalid or storage is unavailable. */
+export function loadHiScore(storage) {
+  return loadInt(storage, HI_SCORE_KEY) ?? 0;
+}
+
+export function saveHiScore(storage, score) {
+  return saveValue(storage, HI_SCORE_KEY, score);
+}
+
+/** @returns {number} last chosen start level (0..MAX_START_LEVEL), default 0 */
+export function loadStartLevel(storage) {
+  const level = loadInt(storage, START_LEVEL_KEY);
+  return level !== null && level <= MAX_START_LEVEL ? level : 0;
+}
+
+/** @returns {boolean} stored mute setting, default false */
+export function loadMuted(storage) {
+  return loadInt(storage, MUTE_KEY) === 1;
 }
 
 function defaultStorage() {
@@ -416,7 +447,7 @@ export function createClock() {
  * @returns {number} simulation steps to run this frame
  */
 export function advanceClock(clock, nowMs, stepMs = STEP_MS, maxFrameMs = MAX_FRAME_MS) {
-  if (clock.last === null) {                      // first frame / after stop()
+  if (clock.last === null) {                      // first frame / after stop() or pause()
     clock.last = nowMs;
     return 0;
   }
@@ -451,6 +482,15 @@ export function createGame({
 }) {
   const state = initialState;
   state.hiScore = Math.max(state.hiScore, loadHiScore(storage));
+  const muted = loadMuted(storage);
+  audio.setMuted?.(muted);
+  ui.setMuted?.(muted);
+
+  function toggleMute() {
+    const now = audio.toggleMute ? audio.toggleMute() : false;
+    ui.setMuted?.(now);
+    saveValue(storage, MUTE_KEY, now ? 1 : 0);
+  }
   const clock = createClock();
   const events = [];
   let running = false;
@@ -460,13 +500,16 @@ export function createGame({
     const steps = advanceClock(clock, now);
     for (let i = 0; i < steps; i++) {
       const prevPhase = state.phase;
-      events.length = 0;
-      update(state, input.poll(), events);
-      for (const e of events) audio.play(e);
+      while (events.length > 0) events.pop();     // not length = 0: that frees the backing store
+      const actions = input.poll();
+      if (actions.mute) toggleMute();            // a setting, not game state: works in every phase
+      update(state, actions, events);
+      for (let e = 0; e < events.length; e++) audio.play(events[e]);
       if (state.phase !== prevPhase && touchesMenu(prevPhase, state.phase)) input.reset();
       if (state.phase === 'gameOver' && prevPhase !== 'gameOver' && state.newHiScore) {
         saveHiScore(storage, state.hiScore);
       }
+      if (prevPhase === 'title' && state.phase === 'playing') saveValue(storage, START_LEVEL_KEY, state.startLevel);
     }
     renderer.render(state);
     ui.update(state);

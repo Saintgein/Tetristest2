@@ -25,9 +25,15 @@ export function inBounds(board, x, y) {
   return x >= 0 && x < board.cols && y >= 0 && y < board.rows;
 }
 
-/** True if every cell of the piece is in bounds and empty. y < 0 is invalid. */
+/**
+ * True if every cell of the piece is in bounds and empty. y < 0 is invalid.
+ * Runs several times per frame, so it reads the cached shape instead of allocating.
+ */
 export function isValidPosition(board, piece) {
-  for (const [x, y] of getAbsoluteCells(piece)) {
+  const shape = getCells(piece.type, piece.rotation);
+  for (let i = 0; i < shape.length; i++) {
+    const x = piece.x + shape[i][0];
+    const y = piece.y + shape[i][1];
     if (!inBounds(board, x, y) || board.cells[y][x] !== 0) return false;
   }
   return true;

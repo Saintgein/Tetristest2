@@ -2,13 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createInitialState, update, createClock, advanceClock, createGame, pauseGame, loadHiScore, saveHiScore,
+  loadStartLevel, loadMuted,
 } from '../src/game.js';
 import { emptyActions } from '../src/input.js';
 import { spawnPiece, getAbsoluteCells, TYPE_INDEX, PIECE_TYPES } from '../src/pieces.js';
 import { dropDistance } from '../src/board.js';
 import {
   STEP_MS, NEXT_COUNT, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES, GAME_OVER_DELAY_FRAMES,
-  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL,
+  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL, MUTE_KEY, START_LEVEL_KEY,
 } from '../src/config.js';
 import { getLockDelay, getGravity } from '../src/progression.js';
 
@@ -92,7 +93,7 @@ test('createInitialState: full SPEC §7 shape in the title phase', () => {
   assert.deepEqual(Object.keys(state).sort(), [
     'active', 'areTimer', 'bag', 'board', 'clearing', 'frame', 'gameOverTimer', 'gravityAcc',
     'hiScore', 'hold', 'level', 'levelUpFlash', 'lines', 'lock', 'newHiScore', 'pausedFrom',
-    'phase', 'queue', 'rng', 'score', 'startLevel', 'stats',
+    'phase', 'queue', 'rng', 'score', 'softDropping', 'startLevel', 'stats',
   ]);
   assert.equal(state.phase, 'title');
   assert.equal(state.level, 7);
@@ -392,7 +393,7 @@ test('single: row 21 open at cols 3–6, I hard drop clears it', () => {
   assert.equal(state.lines, 1);
   assert.equal(state.stats.singles, 1);
   assert.equal(filledCount(state.board), 0);
-  assert.ok(events.includes('clear'));
+  assert.ok(events.includes('single'));
 });
 
 test('double: stack above cleared rows shifts down', () => {
@@ -420,7 +421,7 @@ test('tetris: rows 18–21 open at col 0, vertical I clears all four', () => {
   assert.equal(state.stats.tetrises, 1);
   assert.equal(filledCount(state.board), 0);
   assert.ok(events.includes('tetris'));
-  assert.ok(!events.includes('clear'));
+  assert.ok(!events.includes('single'));
 });
 
 test('lines accumulate across clears', () => {
@@ -660,8 +661,13 @@ function loopHarness({ level = 0, storage = null } = {}) {
     reset() { this.resets++; },
   };
   const renderer = { calls: 0, render() { this.calls++; } };
-  const ui = { calls: 0, update() { this.calls++; } };
-  const audio = { played: [], play(name) { this.played.push(name); } };
+  const ui = { calls: 0, mutedShown: [], update() { this.calls++; }, setMuted(m) { this.mutedShown.push(m); } };
+  const audio = {
+    played: [], muted: false,
+    play(name) { this.played.push(name); },
+    setMuted(m) { this.muted = m; },
+    toggleMute() { this.muted = !this.muted; return this.muted; },
+  };
   const game = createGame({
     input, renderer, ui, audio,
     initialState: createInitialState({ startLevel: level, rng: seeded(5) }),
@@ -1565,7 +1571,7 @@ test('line clear: rows stay on the board for LINE_CLEAR_FRAMES, then collapse', 
   const state = started();
   primeSingle(state);
   const events = run(state, 1, A({ hardDrop: true }));
-  assert.deepEqual(events, ['hardDrop', 'lock', 'clear'], 'sound cue at the start of the animation');
+  assert.deepEqual(events, ['hardDrop', 'lock', 'single'], 'sound cue at the start of the animation');
   assert.deepEqual(state.clearing, { rows: [21], timer: 0 });
   assert.equal(state.active, null);
   for (let i = 1; i < LINE_CLEAR_FRAMES; i++) {
@@ -1756,4 +1762,86 @@ test('createGame: works with no storage available', () => {
   h.game.start();
   h.frame();
   assert.equal(h.state.hiScore, 0);
+});
+
+// ===========================================================================
+// Milestone 5: sound events, settings persistence
+// ===========================================================================
+
+test('clear events: single / double / triple / tetris each get their own sound cue', () => {
+  const expected = { 1: 'single', 2: 'double', 3: 'triple', 4: 'tetris' };
+  for (const [rows, name] of Object.entries(expected)) {
+    const state = started();
+    for (let y = 22 - rows; y < 22; y++) fillRow(state.board, y, [0]);
+    state.active = { type: 'I', rotation: 3, x: -1, y: 10 };
+    const events = run(state, 1, A({ hardDrop: true }));
+    assert.deepEqual(events, ['hardDrop', 'lock', name], `${rows} rows`);
+  }
+});
+
+test('softDrop event: once when a soft drop starts moving, not once per row', () => {
+  const state = started();
+  const events = run(state, 10, A({ softDrop: true }));      // 5 rows
+  assert.deepEqual(events.filter((e) => e === 'softDrop'), ['softDrop']);
+  run(state, 3);                                              // released
+  assert.deepEqual(run(state, 4, A({ softDrop: true })).filter((e) => e === 'softDrop'), ['softDrop'], 'new press, new cue');
+});
+
+test('softDrop event: none while resting on the floor; fresh for each new piece', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  assert.ok(!run(state, 10, A({ softDrop: true })).includes('softDrop'));
+  const moving = started();
+  run(moving, 4, A({ softDrop: true }));
+  run(moving, 1, A({ hardDrop: true, softDrop: true }));
+  settle(moving);
+  assert.ok(run(moving, 2, A({ softDrop: true })).includes('softDrop'), 'held across the spawn still cues the new piece');
+});
+
+test('loop: M toggles mute in any phase, updates the indicator and persists it', () => {
+  const storage = fakeStorage();
+  const h = loopHarness({ storage });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ mute: true }));
+  h.frame();                                                  // title screen
+  assert.equal(h.audio.muted, true);
+  assert.equal(h.ui.mutedShown.at(-1), true);
+  assert.equal(storage.data.get(MUTE_KEY), '1');
+  assert.equal(h.state.phase, 'title', 'mute is not a game action');
+
+  h.input.queue.push(A({ start: true }), A({ pause: true }), A({ mute: true }));
+  h.frame(); h.frame(); h.frame();                            // playing → paused → unmute
+  assert.equal(h.state.phase, 'paused');
+  assert.equal(h.audio.muted, false);
+  assert.equal(storage.data.get(MUTE_KEY), '0');
+});
+
+test('loop: a stored mute setting is applied at startup', () => {
+  const h = loopHarness({ storage: fakeStorage({ [MUTE_KEY]: '1' }) });
+  assert.equal(h.audio.muted, true);
+  assert.deepEqual(h.ui.mutedShown, [true]);
+  const fresh = loopHarness({ storage: fakeStorage() });
+  assert.equal(fresh.audio.muted, false);
+});
+
+test('loop: the chosen start level is saved when a game starts', () => {
+  const storage = fakeStorage();
+  const h = loopHarness({ storage });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ menuX: 1 }), A({ menuX: 1 }), A({ start: true }));
+  h.frame(); h.frame(); h.frame();
+  assert.equal(h.state.phase, 'playing');
+  assert.equal(storage.data.get(START_LEVEL_KEY), '2');
+});
+
+test('loadStartLevel / loadMuted: validate stored values', () => {
+  assert.equal(loadStartLevel(fakeStorage({ [START_LEVEL_KEY]: '7' })), 7);
+  assert.equal(loadStartLevel(fakeStorage({ [START_LEVEL_KEY]: String(MAX_START_LEVEL) })), MAX_START_LEVEL);
+  for (const bad of ['20', '-1', 'x', '']) assert.equal(loadStartLevel(fakeStorage({ [START_LEVEL_KEY]: bad })), 0, bad);
+  assert.equal(loadStartLevel(null), 0);
+  assert.equal(loadMuted(fakeStorage({ [MUTE_KEY]: '1' })), true);
+  for (const other of ['0', 'true', '', '2']) assert.equal(loadMuted(fakeStorage({ [MUTE_KEY]: other })), false, other);
+  assert.equal(loadMuted({ getItem() { throw new Error('blocked'); } }), false);
 });

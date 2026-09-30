@@ -2,14 +2,16 @@
 //  src/main.js
 //  Bootstrap: integer pixel scaling + wiring the game modules together.
 //  QA aids: ?level=N (0–99, beyond the menu's 0–19) sets the start level;
-//  ?debug exposes window.__game for scripted browser tests.
+//  ?reducedMotion forces reduced motion; ?debug exposes window.__game and
+//  window.__audio for scripted browser tests.
 // ==========================================================================
 
 import { MAX_LEVEL } from './config.js';
 import { createInput } from './input.js';
 import { createRenderer } from './renderer.js';
 import { createUI } from './ui.js';
-import { createGame, createInitialState } from './game.js';
+import { createAudio } from './audio.js';
+import { createGame, createInitialState, loadStartLevel } from './game.js';
 
 const MAX_SCALE = 6;
 
@@ -38,7 +40,26 @@ function fitScale() {
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 const params = new URLSearchParams(location.search);
-const startLevel = clamp(parseInt(params.get('level'), 10) || 0, 0, MAX_LEVEL);
+
+let storage = null;
+try { storage = window.localStorage; } catch { /* blocked: play without persistence */ }
+
+// Start level: ?level wins, else the last level chosen on the title screen
+const startLevel = params.has('level')
+  ? clamp(parseInt(params.get('level'), 10) || 0, 0, MAX_LEVEL)
+  : loadStartLevel(storage);
+
+// Reduced motion: OS/browser setting (live), or forced with ?reducedMotion
+const motionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
+const reducedMotion = () => params.has('reducedMotion') || Boolean(motionQuery?.matches);
+const applyMotionClass = () => root.classList.toggle('reduced-motion', reducedMotion());
+applyMotionClass();
+motionQuery?.addEventListener?.('change', applyMotionClass);
+
+const audio = createAudio();
+// Browsers only start audio from a user gesture; unlock() is cheap and idempotent.
+window.addEventListener('keydown', () => audio.unlock());
+window.addEventListener('pointerdown', () => audio.unlock());
 
 const game = createGame({
   input: createInput(window),
@@ -46,7 +67,7 @@ const game = createGame({
     boardCanvas: $('board-canvas'),
     holdCanvas: $('hold-canvas'),
     nextCanvas: $('next-canvas'),
-  }),
+  }, { reducedMotion }),
   ui: createUI({
     score: $('hud-score'),
     hiScore: $('hud-hiscore'),
@@ -57,15 +78,17 @@ const game = createGame({
     overlaySub: $('overlay-sub'),
     overlayInfo: $('overlay-info'),
     well: $('well'),
-  }),
-  audio: { play() {} },                        // M5
+    sound: $('hud-sound'),
+  }, { reducedMotion }),
+  audio,
+  storage,
   initialState: createInitialState({ startLevel }),
 });
 
 game.start();
 
-// QA aid: ?debug exposes the game for scripted browser tests (window.__game.getState()).
-if (params.has('debug')) window.__game = game;
+// QA aid: ?debug exposes the game and audio for scripted browser tests.
+if (params.has('debug')) Object.assign(window, { __game: game, __audio: audio });
 
 // Auto-pause when the player leaves: tab hidden, window minimized or unfocused.
 document.addEventListener('visibilitychange', () => {

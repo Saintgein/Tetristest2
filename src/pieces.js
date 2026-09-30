@@ -129,6 +129,12 @@ const KICKS_JLSTZ = toYDown(KICKS_JLSTZ_YUP);
 const KICKS_I = toYDown(KICKS_I_YUP);
 const NO_KICKS = Object.freeze([Object.freeze([0, 0])]);
 
+// [from][to] lookup built once, so getKicks() doesn't build a string key per rotation.
+const byTransition = (table) => [0, 1, 2, 3].map((from) =>
+  [0, 1, 2, 3].map((to) => table[`${from}>${to}`] ?? NO_KICKS));
+const KICK_LOOKUP_JLSTZ = byTransition(KICKS_JLSTZ);
+const KICK_LOOKUP_I = byTransition(KICKS_I);
+
 /**
  * Kick offsets [dx, dy] (y-down) to try in order when rotating from → to.
  * The first entry is always [0, 0]. O never kicks; non-adjacent rotations
@@ -137,8 +143,7 @@ const NO_KICKS = Object.freeze([Object.freeze([0, 0])]);
  */
 export function getKicks(type, from, to) {
   if (type === 'O') return NO_KICKS;
-  const table = type === 'I' ? KICKS_I : KICKS_JLSTZ;
-  return table[`${from}>${to}`] ?? NO_KICKS;
+  return (type === 'I' ? KICK_LOOKUP_I : KICK_LOOKUP_JLSTZ)[from][to];
 }
 
 // Spawn position: top-left of the bounding box, in the hidden rows (SPEC §8.4).

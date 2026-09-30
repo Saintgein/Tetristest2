@@ -25,9 +25,11 @@ const TETRIS_FLASH_ALPHA = 0.25;
  * the remaining cells flash white on even beats.
  * @returns {{ erased: number, flash: boolean }} erased = column pairs gone (0–5)
  */
-export function lineClearFrame(timer) {
+export function lineClearFrame(timer, out = { erased: 0, flash: false }) {
   const beat = Math.floor(timer / BEAT_FRAMES);
-  return { erased: Math.min(WIPE_STEPS, beat), flash: beat % 2 === 0 };
+  out.erased = Math.min(WIPE_STEPS, beat);
+  out.flash = beat % 2 === 0;
+  return out;
 }
 
 /** Distance of a column from the well's center pair: 0 for cols 4–5, 4 for cols 0 and 9. */
@@ -149,10 +151,14 @@ function context2d(canvas) {
 
 /**
  * @param {{ boardCanvas, holdCanvas, nextCanvas }} canvases
- * @param {{ createCanvas?: (w: number, h: number) => object }} [options] offscreen canvas factory (tests)
+ * @param {{ createCanvas?: (w: number, h: number) => object, reducedMotion?: () => boolean }} [options]
+ *        offscreen canvas factory (tests); reduced motion cuts cleared rows instantly (no flash/wipe/wash)
  * @returns {{ render(state: object): void }}
  */
-export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }, { createCanvas = defaultCreateCanvas } = {}) {
+export function createRenderer(
+  { boardCanvas, holdCanvas, nextCanvas },
+  { createCanvas = defaultCreateCanvas, reducedMotion = () => false } = {},
+) {
   const boardCtx = context2d(boardCanvas);
   const holdCtx = context2d(holdCanvas);
   const nextCtx = context2d(nextCanvas);
@@ -182,12 +188,22 @@ export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }, { create
     }
   }
 
-  function drawPreview(ctx, type, originX, originY, width, height) {
-    const [ox, oy] = previewOrigin(type, width, height, PREVIEW_BLOCK);
+  // Centering offsets per piece type, computed once (render() must not allocate).
+  const originsFor = (width, height) => {
+    const origins = {};
+    for (const type of Object.keys(TYPE_INDEX)) origins[type] = previewOrigin(type, width, height, PREVIEW_BLOCK);
+    return origins;
+  };
+  const holdOrigins = originsFor(holdCanvas.width, holdCanvas.height);
+  const nextOrigins = originsFor(nextCanvas.width, NEXT_SLOT_HEIGHT);
+  const anim = { erased: 0, flash: false };        // scratch for lineClearFrame
+
+  function drawPreview(ctx, type, originX, originY, origins) {
+    const origin = origins[type];
     const sprite = previewSprites.get(TYPE_INDEX[type]);
     const cells = getCells(type, 0);
     for (let i = 0; i < cells.length; i++) {
-      ctx.drawImage(sprite, originX + ox + cells[i][0] * PREVIEW_BLOCK, originY + oy + cells[i][1] * PREVIEW_BLOCK);
+      ctx.drawImage(sprite, originX + origin[0] + cells[i][0] * PREVIEW_BLOCK, originY + origin[1] + cells[i][1] * PREVIEW_BLOCK);
     }
   }
 
@@ -196,12 +212,14 @@ export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }, { create
     boardCtx.drawImage(well, 0, 0);
     if (state.phase === 'paused') return;         // NES-style: no peeking at the stack while paused
 
-    const { clearing } = state;
-    const anim = clearing ? lineClearFrame(clearing.timer) : null;
+    const clearing = state.clearing ?? null;
+    if (clearing) lineClearFrame(clearing.timer, anim);
+    const reduced = clearing !== null && reducedMotion();
 
     for (let y = HIDDEN_ROWS; y < board.rows; y++) {
       const row = board.cells[y];
-      const clearingRow = anim !== null && clearing.rows.includes(y);
+      const clearingRow = clearing !== null && clearing.rows.includes(y);
+      if (clearingRow && reduced) continue;       // reduced motion: rows cut instantly, no flash/wipe
       for (let x = 0; x < board.cols; x++) {
         if (row[x] === 0) continue;
         if (clearingRow && distanceFromCenter(x) < anim.erased) continue;
@@ -210,7 +228,7 @@ export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }, { create
       }
     }
 
-    if (anim !== null && clearing.rows.length === 4 && anim.flash) {   // tetris: whole well flashes
+    if (clearing !== null && !reduced && clearing.rows.length === 4 && anim.flash) {   // tetris: whole well flashes
       boardCtx.globalAlpha = TETRIS_FLASH_ALPHA;
       boardCtx.fillStyle = COLORS.flash;
       boardCtx.fillRect(0, 0, COLS * BLOCK, VISIBLE_ROWS * BLOCK);
@@ -234,13 +252,13 @@ export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }, { create
 
     if (state.hold.type !== null) {
       holdCtx.globalAlpha = state.hold.used ? HOLD_USED_ALPHA : 1;
-      drawPreview(holdCtx, state.hold.type, 0, 0, holdCanvas.width, holdCanvas.height);
+      drawPreview(holdCtx, state.hold.type, 0, 0, holdOrigins);
       holdCtx.globalAlpha = 1;
     }
 
     const count = Math.min(NEXT_COUNT, state.queue.length);
     for (let i = 0; i < count; i++) {
-      drawPreview(nextCtx, state.queue[i], 0, i * NEXT_SLOT_HEIGHT, nextCanvas.width, NEXT_SLOT_HEIGHT);
+      drawPreview(nextCtx, state.queue[i], 0, i * NEXT_SLOT_HEIGHT, nextOrigins);
     }
   }
 

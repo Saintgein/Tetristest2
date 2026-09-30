@@ -39,40 +39,62 @@ export const isLevelUpFlashOn = (state) => state.levelUpFlash > 0 && Math.floor(
 
 /**
  * @param {{ score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo?, well? }} elements
- * @returns {{ update(state: object): void }}
+ * @param {{ reducedMotion?: () => boolean }} [options] reduced motion disables the level-up flash
+ * @returns {{ update(state: object): void, setMuted(muted: boolean): void }}
+ *
+ * update() runs every frame and must not allocate during play, so numbers are
+ * compared before they're formatted and overlay content is only built for the
+ * menu phases.
  */
-export function createUI({ score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well }) {
-  const written = new Map();                   // element → last value written
+export function createUI(
+  { score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well, sound },
+  { reducedMotion = () => false } = {},
+) {
+  const shownNumbers = new Map();              // element → last number shown
+  const shownText = new Map();                 // element → last text written
+  let overlayHidden = null;
+  let infoHidden = null;
+  let wellFlash = null;
 
-  function setText(el, text) {
-    if (!el || written.get(el) === text) return;
-    el.textContent = text;
-    written.set(el, text);
+  function setNumber(el, value, digits) {
+    if (!el || shownNumbers.get(el) === value) return;
+    el.textContent = pad(value, digits);
+    shownNumbers.set(el, value);
   }
 
-  function setFlag(el, key, value, apply) {
-    if (!el || written.get(key) === value) return;
-    apply(value);
-    written.set(key, value);
+  function setText(el, text) {
+    if (!el || shownText.get(el) === text) return;
+    el.textContent = text;
+    shownText.set(el, text);
   }
 
   return {
     update(state) {
-      setText(score, pad(state.score, 6));
-      setText(hiScore, pad(Math.max(state.hiScore, state.score), 6));   // TOP tracks a record live
-      setText(level, pad(state.level, 2));
-      setText(lines, pad(state.lines, 3));
+      setNumber(score, state.score, 6);
+      setNumber(hiScore, state.hiScore > state.score ? state.hiScore : state.score, 6);   // TOP tracks a record live
+      setNumber(level, state.level, 2);
+      setNumber(lines, state.lines, 3);
 
       const screen = overlayContent(state);
-      setFlag(overlay, 'overlay.hidden', !screen, (v) => { overlay.hidden = v; });
+      const hidden = screen === null;
+      if (hidden !== overlayHidden) { overlay.hidden = hidden; overlayHidden = hidden; }
       if (screen) {
         setText(overlayTitle, screen.title);
         setText(overlaySub, screen.sub);
-        setFlag(overlayInfo, 'info.hidden', screen.info === null, (v) => { overlayInfo.hidden = v; });
-        if (screen.info !== null) setText(overlayInfo, screen.info);
+        if (overlayInfo) {
+          const noInfo = screen.info === null;
+          if (noInfo !== infoHidden) { overlayInfo.hidden = noInfo; infoHidden = noInfo; }
+          if (!noInfo) setText(overlayInfo, screen.info);
+        }
       }
 
-      setFlag(well, 'well.flash', isLevelUpFlashOn(state), (v) => well.classList.toggle('well--flash', v));
+      const flash = !reducedMotion() && isLevelUpFlashOn(state);
+      if (well && flash !== wellFlash) { well.classList.toggle('well--flash', flash); wellFlash = flash; }
+    },
+
+    /** Footer sound indicator ("SOUND ON" / "SOUND OFF"). */
+    setMuted(muted) {
+      setText(sound, muted ? 'SOUND OFF' : 'SOUND ON');
     },
   };
 }

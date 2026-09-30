@@ -331,3 +331,37 @@ test('line clear render: tetris flashes the whole well on white beats only', () 
   single.renderer.render(clearingState(0));
   assert.equal(lift(single.boardCanvas), 0, 'singles do not flash the well');
 });
+
+// ---------- reduced motion ----------
+
+function reducedSetup() {
+  const canvases = { boardCanvas: createFakeCanvas(160, 320), holdCanvas: createFakeCanvas(80, 48), nextCanvas: createFakeCanvas(80, 144) };
+  let reduced = true;
+  const renderer = createRenderer(canvases, { createCanvas: (w, h) => createFakeCanvas(w, h), reducedMotion: () => reduced });
+  return { ...canvases, renderer, setReduced: (v) => { reduced = v; } };
+}
+
+test('reduced motion: cleared rows are cut immediately — no flash, no wipe', () => {
+  for (const timer of [0, 4, 8, 19]) {
+    const { boardCanvas, renderer } = reducedSetup();
+    renderer.render(clearingState(timer));
+    assert.equal(rowPattern(boardCanvas, 21), '..........', `timer ${timer}`);
+    assert.deepEqual(rgb(cellCenter(boardCanvas, 0, 20)), hex(PALETTE[TYPE_INDEX.J].face), 'other rows untouched');
+  }
+});
+
+test('reduced motion: no tetris well wash', () => {
+  const { boardCanvas, renderer } = reducedSetup();
+  renderer.render(clearingState(0, [18, 19, 20, 21]));
+  assert.equal(boardCanvas.pixel(5 * 16 + 8, 2 * 16 + 8)[0], 0);
+});
+
+test('reduced motion is read live each frame', () => {
+  const { boardCanvas, renderer, setReduced } = reducedSetup();
+  setReduced(false);
+  renderer.render(clearingState(0));
+  assert.equal(rowPattern(boardCanvas, 21), 'WWWWWWWWWW');
+  setReduced(true);
+  renderer.render(clearingState(0));
+  assert.equal(rowPattern(boardCanvas, 21), '..........');
+});

@@ -177,3 +177,23 @@ test('overlay info lines fit the well', () => {
     assert.ok(overlayContent(state).info.length * 8 <= 160, overlayContent(state).info);
   }
 });
+
+// ---------- Milestone 5 ----------
+
+test('reduced motion: no level-up well flash', () => {
+  const { els } = setup();
+  const ui = createUI(els, { reducedMotion: () => true });
+  ui.update(baseState({ levelUpFlash: LEVEL_UP_FLASH_FRAMES }));
+  assert.ok(!els.well.classes.has('well--flash'));
+});
+
+test('sound indicator: SOUND ON / SOUND OFF, written only on change', () => {
+  const sound = fakeElement();
+  const ui = createUI({ ...setup().els, sound });
+  ui.setMuted(true);
+  assert.equal(sound.textContent, 'SOUND OFF');
+  ui.setMuted(false);
+  assert.equal(sound.textContent, 'SOUND ON');
+  ui.setMuted(false);
+  assert.equal(sound.writes, 2);
+});
