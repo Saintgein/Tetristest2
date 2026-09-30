@@ -97,12 +97,13 @@ const NON_START_TARGETS = 'button, a, input, select, textarea, [data-no-start]';
  * @param {EventTarget} target receives keydown / keyup / blur / pointerdown (window in the browser)
  * @param {Record<string, string[]>} bindings action → KeyboardEvent.code list
  * @param {{ dasFrames?: number, arrFrames?: number }} [timing]
- * @param {{ keyFallbacks?: Record<string, string>, pointerStart?: boolean, touchRoot?: Element|null, getGamepads?: (() => (Gamepad|null)[])|null, onGamepadButton?: (() => void)|null }} [options]
+ * @param {{ keyFallbacks?: Record<string, string>, pointerStart?: boolean, touchRoot?: Element|null, getGamepads?: (() => (Gamepad|null)[])|null, onGamepadButton?: (() => void)|null, onUserGesture?: ((e?: Event) => void)|null }} [options]
  *        keyFallbacks: KeyboardEvent.key → action when the code is empty/unbound;
  *        pointerStart: a primary click/tap anywhere (except controls) presses Start;
  *        touchRoot: container element with [data-action] virtual buttons;
  *        getGamepads: accessor returning gamepads list (defaults to navigator.getGamepads);
- *        onGamepadButton: callback fired on controller button press (used for audio unlock)
+ *        onGamepadButton: callback fired on controller button press (used for audio unlock);
+ *        onUserGesture: callback fired on any user input gesture (used for audio unlock)
  * @returns {{ poll(): Actions, press(action: string): void, reset(): void, destroy(): void, bindTouch(element: Element): void }}
  */
 export function createInput(
@@ -115,6 +116,7 @@ export function createInput(
     touchRoot = null,
     getGamepads = null,
     onGamepadButton = null,
+    onUserGesture = null,
   } = {},
 ) {
   // Everything below is preallocated: key handling and poll() never allocate
@@ -132,6 +134,11 @@ export function createInput(
       codeDown.set(code, false);
     }
   }
+
+  // Strict rising-edge tracking for pause across keyboard, touch and gamepad
+  const pausePhysicalKeysDown = new Set();
+  const touchPausePointers = new Set();
+  let pauseLocked = false;
 
   // Preallocated multi-touch tracking for virtual buttons (up to 16 concurrent touch points).
   // Strictly zero allocations during touch events and game poll ticks.
@@ -198,10 +205,14 @@ export function createInput(
   const isActive = (action) => isHeld(action) || isPressed(action);
 
   function onKeyDown(e) {
+    if (typeof onUserGesture === 'function') onUserGesture(e);
     if (e.isComposing || e.keyCode === 229) return;   // IME composing: the key belongs to the text
     if (!resolve(e)) return;
     const { action, id } = hit;
     e.preventDefault();                     // keep the browser from scrolling / clicking with game keys
+    if (action === 'pause') {
+      pausePhysicalKeysDown.add(id);
+    }
     if (e.repeat || codeDown.get(id)) return;
     codeDown.set(id, true);
     heldCount[action]++;
@@ -215,6 +226,9 @@ export function createInput(
     if (!resolve(e)) return;
     const { action, id } = hit;
     e.preventDefault();
+    if (action === 'pause') {
+      pausePhysicalKeysDown.delete(id);
+    }
     if (!codeDown.get(id)) return;          // e.g. released after a blur reset
     codeDown.set(id, false);
     heldCount[action]--;
@@ -229,6 +243,7 @@ export function createInput(
 
   /** Click / tap anywhere presses Start, e.g. when the page doesn't have keyboard focus. */
   function onPointerDown(e) {
+    if (typeof onUserGesture === 'function') onUserGesture(e);
     if (e.isPrimary === false) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (typeof e.target?.closest === 'function' && e.target.closest(NON_START_TARGETS)) return;
@@ -241,11 +256,24 @@ export function createInput(
   }
 
   function reset() {
-    for (const code of codeDown.keys()) codeDown.set(code, false);
-    for (const action of actionNames) heldCount[action] = 0;
+    for (const code of codeDown.keys()) {
+      if (pausePhysicalKeysDown.has(code)) continue;
+      codeDown.set(code, false);
+    }
+    for (const action of actionNames) {
+      if (action === 'pause' && (pausePhysicalKeysDown.size > 0 || touchPausePointers.size > 0)) {
+        heldCount[action] = 1;
+        continue;
+      }
+      heldCount[action] = 0;
+    }
     for (let i = 0; i < MAX_TOUCH_POINTERS; i++) {
       const el = activePointerElements[i];
       const pid = activePointerIds[i];
+      const action = activePointerActions[i];
+      if (action === 'pause' && touchPausePointers.has(pid)) {
+        continue;
+      }
       if (el) {
         el.classList?.remove?.('is-pressed');
         try {
@@ -272,10 +300,15 @@ export function createInput(
   // -------------------------------------------------------------------------
 
   function onTouchButtonPointerDown(e) {
+    if (typeof onUserGesture === 'function') onUserGesture(e);
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const btn = e.currentTarget || e.target;
     const action = btn?.getAttribute?.('data-action') ?? btn?.dataset?.action;
     if (!action || !(action in pressed)) return;
+
+    if (action === 'pause') {
+      touchPausePointers.add(e.pointerId);
+    }
 
     e.preventDefault?.();
 
@@ -300,6 +333,9 @@ export function createInput(
     if (slot !== -1) {
       const oldAction = activePointerActions[slot];
       if (oldAction !== action) {
+        if (oldAction === 'pause') {
+          touchPausePointers.delete(e.pointerId);
+        }
         heldCount[oldAction]--;
         if (heldCount[oldAction] < 0) heldCount[oldAction] = 0;
         activePointerActions[slot] = action;
@@ -327,6 +363,7 @@ export function createInput(
   }
 
   function releasePointerSlot(pointerId, targetElement) {
+    touchPausePointers.delete(pointerId);
     for (let i = 0; i < MAX_TOUCH_POINTERS; i++) {
       if (activePointerIds[i] === pointerId) {
         const action = activePointerActions[i];
@@ -360,6 +397,7 @@ export function createInput(
 
   function onTouchButtonPointerCancel(e) {
     e.preventDefault?.();
+    touchPausePointers.delete(e.pointerId);
     releasePointerSlot(e.pointerId, e.currentTarget || e.target);
   }
 
@@ -495,6 +533,9 @@ export function createInput(
       if (typeof onGamepadButton === 'function') {
         onGamepadButton();
       }
+      if (typeof onUserGesture === 'function') {
+        onUserGesture();
+      }
     }
     gamepadButtonWasDown = anyGamepadButtonDown;
 
@@ -518,8 +559,23 @@ export function createInput(
     const gpRotateCWPressed = gamepadCurrent[GP_ROTATE_CW] === 1 && gamepadPrevious[GP_ROTATE_CW] === 0;
     const gpRotateCCWPressed = gamepadCurrent[GP_ROTATE_CCW] === 1 && gamepadPrevious[GP_ROTATE_CCW] === 0;
     const gpHoldPressed = gamepadCurrent[GP_HOLD] === 1 && gamepadPrevious[GP_HOLD] === 0;
-    const gpPausePressed = gamepadCurrent[GP_PAUSE] === 1 && gamepadPrevious[GP_PAUSE] === 0;
     const gpStartPressed = gamepadCurrent[GP_START] === 1 && gamepadPrevious[GP_START] === 0;
+
+    // Strict rising-edge pause: single trigger on press, requires full release before firing again
+    const gpPauseDown = gamepadCurrent[GP_PAUSE] === 1;
+    const pauseInputDown = pausePhysicalKeysDown.size > 0 || touchPausePointers.size > 0 || gpPauseDown;
+    let pauseTriggered = false;
+    if (pauseInputDown) {
+      if (!pauseLocked) {
+        pauseTriggered = true;
+        pauseLocked = true;
+      }
+    } else {
+      pauseLocked = false;
+      if (isPressed('pause')) {
+        pauseTriggered = true;
+      }
+    }
 
     // One Actions object, overwritten every poll (no per-frame allocation).
     // Callers must read it before the next poll; copy it to keep a snapshot.
@@ -533,7 +589,7 @@ export function createInput(
     actions.rotate = cw ? 1 : ccw ? -1 : 0;
 
     actions.hold = isPressed('hold') || gpHoldPressed;
-    actions.pause = isPressed('pause') || gpPausePressed;
+    actions.pause = pauseTriggered;
     actions.start = isPressed('start') || gpStartPressed;
     actions.mute = isPressed('mute');
     actions.music = isPressed('music');
@@ -544,9 +600,16 @@ export function createInput(
     return actions;
   }
 
+  function onBlur() {
+    pausePhysicalKeysDown.clear();
+    touchPausePointers.clear();
+    pauseLocked = false;
+    reset();
+  }
+
   target.addEventListener('keydown', onKeyDown, KEY_LISTENER_OPTIONS);
   target.addEventListener('keyup', onKeyUp, KEY_LISTENER_OPTIONS);
-  target.addEventListener('blur', reset);
+  target.addEventListener('blur', onBlur);
   if (pointerStart) target.addEventListener('pointerdown', onPointerDown, POINTER_LISTENER_OPTIONS);
 
   return {
@@ -556,8 +619,11 @@ export function createInput(
     destroy() {
       target.removeEventListener('keydown', onKeyDown, KEY_LISTENER_OPTIONS);
       target.removeEventListener('keyup', onKeyUp, KEY_LISTENER_OPTIONS);
-      target.removeEventListener('blur', reset);
+      target.removeEventListener('blur', onBlur);
       if (pointerStart) target.removeEventListener('pointerdown', onPointerDown, POINTER_LISTENER_OPTIONS);
+      pausePhysicalKeysDown.clear();
+      touchPausePointers.clear();
+      pauseLocked = false;
       unbindTouch();
     },
     bindTouch,

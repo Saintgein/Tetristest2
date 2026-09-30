@@ -546,8 +546,15 @@ export function createAudio({
     },
 
     play(name) {
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        try {
+          const pending = ctx.resume();
+          if (pending && typeof pending.then === 'function') pending.then(undefined, () => {});
+        } catch { /* ignore */ }
+      }
       const recipe = RECIPES[name];
-      if (!ctx || !recipe) return;
+      if (!recipe) return;
       try {
         const t0 = ctx.currentTime;
         const used = new Set(recipe.map((n) => n.ch));
@@ -558,6 +565,16 @@ export function createAudio({
         }
         for (const n of recipe) schedule(n, t0);
       } catch { /* never let a sound break the game */ }
+    },
+
+    resume() {
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        try {
+          const pending = ctx.resume();
+          if (pending && typeof pending.then === 'function') pending.then(undefined, () => {});
+        } catch { /* resume() threw synchronously */ }
+      }
     },
 
     setMuted(value) {
@@ -608,6 +625,8 @@ export function createAudio({
 
     get muted() { return muted; },
     get ready() { return ctx !== null; },
+    get context() { return ctx; },
+    get state() { return ctx?.state ?? 'uninitialized'; },
     get musicEnabled() { return music.enabled; },
     get musicPlaying() { return music.active; },
     get musicFailed() { return music.failed; },

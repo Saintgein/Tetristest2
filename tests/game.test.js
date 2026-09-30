@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createInitialState, update, createClock, advanceClock, createGame, pauseGame, loadHiScore, saveHiScore,
-  loadStartLevel, loadMuted, loadBgmEnabled,
+  loadStartLevel, loadMuted, loadBgmEnabled, loadSoundEnabled,
 } from '../src/game.js';
-import { emptyActions } from '../src/input.js';
+import { emptyActions, createInput } from '../src/input.js';
 import { spawnPiece, getAbsoluteCells, TYPE_INDEX, PIECE_TYPES } from '../src/pieces.js';
 import { dropDistance } from '../src/board.js';
 import {
   STEP_MS, NEXT_COUNT, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES, GAME_OVER_DELAY_FRAMES,
-  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL, MUTE_KEY, START_LEVEL_KEY, BGM_KEY,
+  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL, MUTE_KEY, SOUND_KEY, START_LEVEL_KEY, BGM_KEY,
 } from '../src/config.js';
 import { getLockDelay, getGravity } from '../src/progression.js';
 
@@ -2091,4 +2091,142 @@ test('M / B toggles with throwing audio: no crash, setting still saved', () => {
   const h = resilientHarness({ audio: { toggleMute: boom, toggleMusic: boom } });
   assert.equal(h.game.toggleMute(), false);
   assert.equal(h.game.toggleMusic(), false);
+});
+
+test('loadSoundEnabled: cleanly evaluates to true when null or undefined', () => {
+  assert.equal(loadSoundEnabled(null), true);
+  assert.equal(loadSoundEnabled(undefined), true);
+  assert.equal(loadSoundEnabled(fakeStorage()), true);
+  assert.equal(loadSoundEnabled(fakeStorage({ [SOUND_KEY]: '1' })), true);
+  assert.equal(loadSoundEnabled(fakeStorage({ [SOUND_KEY]: 'true' })), true);
+  assert.equal(loadSoundEnabled(fakeStorage({ [SOUND_KEY]: '0' })), false);
+  assert.equal(loadSoundEnabled(fakeStorage({ [SOUND_KEY]: 'false' })), false);
+  // Falls back to MUTE_KEY if SOUND_KEY is absent
+  assert.equal(loadSoundEnabled(fakeStorage({ [MUTE_KEY]: '1' })), false);
+  assert.equal(loadSoundEnabled(fakeStorage({ [MUTE_KEY]: '0' })), true);
+});
+
+test('loadBgmEnabled: cleanly evaluates to true when null or undefined', () => {
+  assert.equal(loadBgmEnabled(null), true);
+  assert.equal(loadBgmEnabled(undefined), true);
+  assert.equal(loadBgmEnabled(fakeStorage()), true);
+  assert.equal(loadBgmEnabled(fakeStorage({ [BGM_KEY]: '1' })), true);
+  assert.equal(loadBgmEnabled(fakeStorage({ [BGM_KEY]: 'true' })), true);
+  assert.equal(loadBgmEnabled(fakeStorage({ [BGM_KEY]: '0' })), false);
+  assert.equal(loadBgmEnabled(fakeStorage({ [BGM_KEY]: 'false' })), false);
+});
+
+test('createGame: suspended AudioContext is resumed when transitioning title -> playing', () => {
+  let resumes = 0;
+  const mockCtx = {
+    state: 'suspended',
+    resume() {
+      resumes++;
+      this.state = 'running';
+      return Promise.resolve();
+    },
+  };
+  const h = resilientHarness({
+    audio: {
+      context: mockCtx,
+      get state() { return mockCtx.state; },
+      resume() { return mockCtx.resume(); },
+    },
+  });
+  h.game.start();
+  h.frame(); // title
+  assert.equal(resumes, 0);
+  assert.equal(mockCtx.state, 'suspended');
+
+  h.input.queue.push(A({ start: true }));
+  h.frame(); // title -> playing
+  assert.equal(h.state.phase, 'playing');
+  assert.equal(resumes > 0, true, 'AudioContext.resume() was called');
+  assert.equal(mockCtx.state, 'running');
+});
+
+test('createGame: suspended AudioContext is resumed on any gameplay action', () => {
+  let resumes = 0;
+  const mockCtx = {
+    state: 'suspended',
+    resume() {
+      resumes++;
+      this.state = 'running';
+      return Promise.resolve();
+    },
+  };
+  const h = resilientHarness({
+    audio: {
+      context: mockCtx,
+      get state() { return mockCtx.state; },
+      resume() { return mockCtx.resume(); },
+    },
+  });
+  h.game.start();
+  h.frame(); // title
+  assert.equal(resumes, 0);
+
+  // Action (shift) while suspended
+  h.input.queue.push(A({ shift: -1 }));
+  h.frame();
+  assert.equal(resumes > 0, true, 'AudioContext.resume() called on action');
+  assert.equal(mockCtx.state, 'running');
+});
+
+test('game loop with createInput: holding pause key across multiple frames toggles pause exactly once', () => {
+  const listeners = {};
+  const target = {
+    addEventListener(type, fn) { (listeners[type] ??= new Set()).add(fn); },
+    removeEventListener(type, fn) { listeners[type]?.delete(fn); },
+    emit(type, event = {}) { for (const fn of listeners[type] ?? []) fn(event); },
+  };
+  const makeKeyEvent = (code, repeat = false) => ({
+    code, repeat, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; },
+  });
+
+  const input = createInput(target);
+  const h = loopHarness();
+  const game = createGame({
+    input,
+    renderer: h.renderer,
+    ui: h.ui,
+    audio: h.audio,
+    storage: null,
+    initialState: started(),
+    raf: h.clock.raf,
+    caf: h.clock.caf,
+  });
+  game.start();
+  let t = 1000;
+  const frame = () => h.clock.tick((t += STEP_MS));
+
+  frame();
+  assert.equal(game.getState().phase, 'playing');
+
+  // Press KeyP
+  target.emit('keydown', makeKeyEvent('KeyP'));
+  frame();
+  assert.equal(game.getState().phase, 'paused', 'frame 1: enters paused');
+
+  // Hold KeyP across 5 more frames
+  for (let i = 0; i < 5; i++) {
+    frame();
+    assert.equal(game.getState().phase, 'paused', `frame ${i + 2}: stays paused while KeyP held`);
+  }
+
+  // Release KeyP
+  target.emit('keyup', makeKeyEvent('KeyP'));
+  frame();
+  assert.equal(game.getState().phase, 'paused', 'stays paused on key release');
+
+  // Press KeyP again to unpause
+  target.emit('keydown', makeKeyEvent('KeyP'));
+  frame();
+  assert.equal(game.getState().phase, 'playing', 'unpauses on second press');
+
+  // Hold KeyP across 5 more frames after unpause
+  for (let i = 0; i < 5; i++) {
+    frame();
+    assert.equal(game.getState().phase, 'playing', `stays playing while held after unpause`);
+  }
 });

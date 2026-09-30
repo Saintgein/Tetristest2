@@ -1061,3 +1061,168 @@ test('gamepad: zero allocations during polling with active controller inputs', (
   const a3 = input.poll();
   assert.equal(a2, a3, 'poll() continues reusing the preallocated Actions instance');
 });
+
+test('audio unlock: keyboard keydown on desktop triggers onUserGesture and transitions AudioContext to running', () => {
+  let resumed = false;
+  let unlocked = false;
+  const mockContext = {
+    state: 'suspended',
+    resume() {
+      this.state = 'running';
+      resumed = true;
+      return Promise.resolve();
+    },
+  };
+  const mockAudio = {
+    unlock() {
+      unlocked = true;
+      if (mockContext.state === 'suspended') mockContext.resume();
+    },
+  };
+
+  const target = fakeTarget();
+  createInput(target, undefined, undefined, {
+    onUserGesture: () => mockAudio.unlock(),
+  });
+
+  assert.equal(mockContext.state, 'suspended');
+
+  // Verify Enter, Space, NumpadEnter, and directional keys invoke unlock and transition AudioContext to running
+  const testKeys = ['Enter', 'Space', 'NumpadEnter', 'ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp'];
+  for (const code of testKeys) {
+    mockContext.state = 'suspended';
+    resumed = false;
+    unlocked = false;
+    target.emit('keydown', keyEvent(code));
+    assert.equal(unlocked, true, `key ${code} should call unlock`);
+    assert.equal(resumed, true, `key ${code} should resume AudioContext`);
+    assert.equal(mockContext.state, 'running', `key ${code} should transition state to running`);
+  }
+});
+
+test('pause rising edge: holding KeyP for multiple ticks toggles pause exactly once until released and pressed again', () => {
+  const target = fakeTarget();
+  const input = createInput(target);
+
+  // Tick 0: KeyP down
+  target.emit('keydown', keyEvent('KeyP'));
+  const a0 = input.poll();
+  assert.equal(a0.pause, true, 'tick 0: pause triggers on initial press');
+
+  // Simulate phase change reset that happens in game loop
+  input.reset();
+
+  // Tick 1: KeyP still held
+  const a1 = input.poll();
+  assert.equal(a1.pause, false, 'tick 1: pause does NOT trigger while held');
+
+  // Tick 2: KeyP still held (OS key-repeat simulation)
+  target.emit('keydown', keyEvent('KeyP', true));
+  const a2 = input.poll();
+  assert.equal(a2.pause, false, 'tick 2: repeat keydown ignored while held');
+
+  // Tick 3: Key released
+  target.emit('keyup', keyEvent('KeyP'));
+  const a3 = input.poll();
+  assert.equal(a3.pause, false, 'tick 3: pause does NOT trigger on keyup');
+
+  // Tick 4: Key pressed again (unpause toggle)
+  target.emit('keydown', keyEvent('KeyP'));
+  const a4 = input.poll();
+  assert.equal(a4.pause, true, 'tick 4: pause triggers on new press after release');
+
+  // Tick 5: Still held after unpause
+  input.reset();
+  const a5 = input.poll();
+  assert.equal(a5.pause, false, 'tick 5: pause does NOT trigger while held after unpause');
+});
+
+test('pause rising edge: holding Escape for multiple ticks toggles pause exactly once until released and pressed again', () => {
+  const target = fakeTarget();
+  const input = createInput(target);
+
+  // Tick 0: Escape down
+  target.emit('keydown', keyEvent('Escape'));
+  assert.equal(input.poll().pause, true, 'initial press fires pause');
+
+  // Phase transition reset
+  input.reset();
+  assert.equal(input.poll().pause, false, 'consecutive tick 1 while held ignores pause');
+  assert.equal(input.poll().pause, false, 'consecutive tick 2 while held ignores pause');
+
+  // Release
+  target.emit('keyup', keyEvent('Escape'));
+  assert.equal(input.poll().pause, false, 'keyup frame produces no pause');
+
+  // Press again
+  target.emit('keydown', keyEvent('Escape'));
+  assert.equal(input.poll().pause, true, 'second press triggers pause toggle');
+});
+
+test('pause rising edge: holding Gamepad Button 9 for multiple ticks toggles pause exactly once until released and pressed again', () => {
+  let pads = [fakeGamepad({ buttons: { 9: true } })];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // Tick 0: Button 9 down
+  const a0 = input.poll();
+  assert.equal(a0.pause, true, 'tick 0: Gamepad Button 9 triggers pause');
+
+  // Phase transition reset
+  input.reset();
+
+  // Tick 1: Button 9 still held
+  const a1 = input.poll();
+  assert.equal(a1.pause, false, 'tick 1: Gamepad Button 9 held does not trigger pause');
+
+  // Tick 2: Button 9 still held
+  input.reset();
+  const a2 = input.poll();
+  assert.equal(a2.pause, false, 'tick 2: Gamepad Button 9 held does not trigger pause');
+
+  // Tick 3: Button 9 released
+  pads = [fakeGamepad()];
+  const a3 = input.poll();
+  assert.equal(a3.pause, false, 'tick 3: release does not trigger pause');
+
+  // Tick 4: Button 9 pressed again
+  pads = [fakeGamepad({ buttons: { 9: true } })];
+  const a4 = input.poll();
+  assert.equal(a4.pause, true, 'tick 4: Gamepad Button 9 press again triggers pause toggle');
+
+  // Tick 5: Button 9 still held
+  input.reset();
+  const a5 = input.poll();
+  assert.equal(a5.pause, false, 'tick 5: held does not trigger pause');
+});
+
+test('pause rising edge: holding touch PAUSE button for multiple ticks toggles pause exactly once until released and pressed again', () => {
+  const root = fakeTouchRoot(['pause']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btnPause] = root.buttons;
+
+  // Touch pointerdown
+  btnPause.emit('pointerdown', touchPointer(1));
+  const a0 = input.poll();
+  assert.equal(a0.pause, true, 'tick 0: touch PAUSE triggers pause');
+
+  // Phase transition reset
+  input.reset();
+
+  // Touch still held
+  const a1 = input.poll();
+  assert.equal(a1.pause, false, 'tick 1: touch PAUSE held does not trigger pause');
+
+  const a2 = input.poll();
+  assert.equal(a2.pause, false, 'tick 2: touch PAUSE held does not trigger pause');
+
+  // Touch released
+  btnPause.emit('pointerup', touchPointer(1));
+  const a3 = input.poll();
+  assert.equal(a3.pause, false, 'tick 3: release does not trigger pause');
+
+  // Touch pressed again
+  btnPause.emit('pointerdown', touchPointer(2));
+  const a4 = input.poll();
+  assert.equal(a4.pause, true, 'tick 4: touch pressed again triggers pause toggle');
+});

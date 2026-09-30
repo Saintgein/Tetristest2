@@ -195,7 +195,16 @@
       poll = input.poll();
       check('touch on title screen triggers start', poll.start === true);
 
-      // 7. Gamepad Connection Lifecycle & Dynamic Prompts
+      // 7. Desktop Audio Unlock
+      const dAudio = dWin.__audio;
+      const dGame = dWin.__game;
+      check('desktop: audio exists and not ready before gesture', Boolean(dAudio) && dAudio.ready === false);
+
+      // Dispatch keydown on desktop window to unlock audio
+      dWin.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowDown', bubbles: true }));
+      check('desktop: keydown unlocks audio', dAudio.ready === true);
+
+      // 8. Gamepad Connection Lifecycle & Dynamic Prompts
       const dOverlaySub = dDoc.getElementById('overlay-sub');
       check('desktop initial prompt is default', dOverlaySub.textContent.includes('CLICK TO START'));
 
@@ -212,7 +221,37 @@
       check('gamepad disconnected: has-gamepad class removed', !dDoc.documentElement.classList.contains('has-gamepad'));
       check('gamepad disconnected: prompt reverts to default', dOverlaySub.textContent.includes('CLICK TO START'));
 
-      // 8. Console Cleanliness
+      // 9. Desktop Game Start & Keyboard Pause Edge Trigger
+      // Start desktop game
+      dWin.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter', bubbles: true }));
+      await wait(100);
+      check('desktop: Enter starts game to playing phase', dGame.getState().phase === 'playing');
+
+      // Press KeyP to pause
+      dWin.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', bubbles: true }));
+      await wait(50);
+      check('desktop: KeyP pauses game', dGame.getState().phase === 'paused');
+
+      // Hold KeyP for another 100ms
+      await wait(100);
+      check('desktop: holding KeyP keeps game paused (no rapid toggle)', dGame.getState().phase === 'paused');
+
+      // Release KeyP
+      dWin.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyP', bubbles: true }));
+      await wait(50);
+      check('desktop: releasing KeyP leaves game paused', dGame.getState().phase === 'paused');
+
+      // Press KeyP again to unpause
+      dWin.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', bubbles: true }));
+      await wait(50);
+      check('desktop: pressing KeyP again unpauses to playing', dGame.getState().phase === 'playing');
+
+      // Hold KeyP for another 100ms after unpause
+      await wait(100);
+      check('desktop: holding KeyP keeps game playing (no rapid toggle)', dGame.getState().phase === 'playing');
+      dWin.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyP', bubbles: true }));
+
+      // 10. Console Cleanliness
       check('console has zero unhandled errors', errors.length === 0, errors.join(', '));
 
       // Display results in HTML

@@ -30,6 +30,7 @@ export const LEVEL_UP_FLASH_FRAMES = 30;          // well-border flash after a l
 export const GAME_OVER_DELAY_FRAMES = 60;         // Enter ignored for 1 s on the game-over screen
 export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage keys
 export const MUTE_KEY = 'tetris.muted';
+export const SOUND_KEY = 'tetris.soundEnabled';
 export const START_LEVEL_KEY = 'tetris.startLevel';
 export const BGM_KEY = 'tetris.bgmEnabled';         // '1' | '0', default on
 

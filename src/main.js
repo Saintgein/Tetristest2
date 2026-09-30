@@ -86,6 +86,8 @@ const audio = createAudio();
 const unlockAudio = () => audio.unlock();
 window.addEventListener('keydown', unlockAudio, { capture: true });
 window.addEventListener('pointerdown', unlockAudio, { capture: true });
+window.addEventListener('mousedown', unlockAudio, { capture: true });
+window.addEventListener('click', unlockAudio, { capture: true });
 window.addEventListener('touchstart', unlockAudio, { capture: true, passive: true });
 window.addEventListener('touchend', unlockAudio, { capture: true, passive: true });
 
@@ -128,6 +130,7 @@ if (hasGamepad()) {
 const input = createInput(window, undefined, undefined, {
   touchRoot: $('touch-controls'),
   onGamepadButton: unlockAudio,
+  onUserGesture: unlockAudio,
 });
 
 const game = createGame({

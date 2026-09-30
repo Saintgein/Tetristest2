@@ -7,7 +7,7 @@
 
 import {
   NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES,
-  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY, MUTE_KEY, START_LEVEL_KEY, BGM_KEY,
+  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY, MUTE_KEY, SOUND_KEY, START_LEVEL_KEY, BGM_KEY,
 } from './config.js';
 import {
   createBoard, isValidPosition, lockPiece, findFullRows, clearRows, isLockOut, dropDistance,
@@ -420,14 +420,41 @@ export function loadStartLevel(storage) {
   return level !== null && level <= MAX_START_LEVEL ? level : 0;
 }
 
-/** @returns {boolean} stored mute setting, default false */
-export function loadMuted(storage) {
-  return loadInt(storage, MUTE_KEY) === 1;
+export { SOUND_KEY };
+
+/**
+ * @returns {boolean} stored sound setting; cleanly evaluates to true when null or undefined.
+ */
+export function loadSoundEnabled(storage) {
+  try {
+    const rawSound = storage?.getItem?.(SOUND_KEY);
+    if (rawSound !== null && rawSound !== undefined) {
+      return rawSound !== '0' && rawSound !== 'false';
+    }
+    const rawMute = storage?.getItem?.(MUTE_KEY);
+    if (rawMute !== null && rawMute !== undefined) {
+      return rawMute !== '1';
+    }
+    return true; // Default cleanly evaluates to true when null or undefined
+  } catch {
+    return true;
+  }
 }
 
-/** @returns {boolean} stored music preference; on unless explicitly turned off */
+/** @returns {boolean} stored mute setting, default false */
+export function loadMuted(storage) {
+  return !loadSoundEnabled(storage);
+}
+
+/** @returns {boolean} stored music preference; on unless explicitly turned off; cleanly evaluates to true when null or undefined */
 export function loadBgmEnabled(storage) {
-  return loadInt(storage, BGM_KEY) !== 0;
+  try {
+    const raw = storage?.getItem?.(BGM_KEY);
+    if (raw === null || raw === undefined) return true;
+    return raw !== '0' && raw !== 'false';
+  } catch {
+    return true;
+  }
 }
 
 function defaultStorage() {
@@ -517,6 +544,7 @@ export function createGame({
       report('audio', err);
     }
     saveValue(storage, MUTE_KEY, now ? 1 : 0);
+    saveValue(storage, SOUND_KEY, now ? 0 : 1);
     return now;
   }
 
@@ -561,6 +589,25 @@ export function createGame({
       const actions = input.poll();
       if (actions.mute) toggleMute();            // settings, not game state: work in every phase
       if (actions.music) toggleMusic();
+
+      const hasAction =
+        actions.start ||
+        actions.shift !== 0 ||
+        actions.rotate !== 0 ||
+        actions.softDrop ||
+        actions.hardDrop ||
+        actions.hold ||
+        actions.pause;
+
+      if (hasAction) {
+        const audioCtx = audio.context ?? audio.ctx;
+        if (audioCtx && audioCtx.state === 'suspended') {
+          try { audioCtx.resume?.(); } catch { /* ignore */ }
+        } else if (typeof audio.resume === 'function' && audio.state === 'suspended') {
+          try { audio.resume(); } catch { /* ignore */ }
+        }
+      }
+
       update(state, actions, events);
       try {
         for (let e = 0; e < events.length; e++) audio.play(events[e]);
@@ -573,6 +620,12 @@ export function createGame({
       }
       if (prevPhase === 'title' && state.phase === 'playing') {
         saveValue(storage, START_LEVEL_KEY, state.startLevel);
+        const audioCtx = audio.context ?? audio.ctx;
+        if (audioCtx && audioCtx.state === 'suspended') {
+          try { audioCtx.resume?.(); } catch { /* ignore */ }
+        } else if (typeof audio.resume === 'function' && audio.state === 'suspended') {
+          try { audio.resume(); } catch { /* ignore */ }
+        }
         try {
           audio.restartMusic?.();                 // every new game starts at bar 1
         } catch (err) {
