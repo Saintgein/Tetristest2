@@ -324,31 +324,43 @@ landing spot; P pauses and resumes without a speed burst; switching tabs pauses.
 
 ---
 
-## Milestone 4 — Progression, scoring & HUD
+## Milestone 4 — Progression, line clears, high score & game-over polish ✅
 
 Goal: the full NES-style difficulty curve and all on-screen information.
 
 **Files:** `src/progression.js`, `src/ui.js`, `src/game.js`, `src/renderer.js`,
-`tests/progression.test.js`
+`src/main.js`, `index.html`, `style.css`, tests
 
-- [ ] `progression.js` (SPEC §6.3, §8)
-  - [ ] `linesToFirstLevelUp(startLevel)`, `levelFromLines(startLevel, lines)`
-  - [ ] `scoreBonusLevels(score)`, `computeLevel({ startLevel, lines, score })`
-- [ ] `game.js`
-  - [ ] `lineClear` phase with `clearing = { rows, timer }` for `LINE_CLEAR_FRAMES`
-  - [ ] Recompute level after each lock (score already applied in M3); emit `levelUp`
-  - [ ] Title screen: `menuX` adjusts `startLevel` 0–19
-  - [ ] High score load/save (`localStorage['tetris.hiScore']`)
-- [ ] `ui.js`: title level selector (`LEVEL < 00 >`), game-over score line
-- [ ] `renderer.js`: line-clear flash + center-out wipe; level-up well-border flash;
-      tetris (4 lines) full-well flash
-- [ ] Tests: first level-up at start 0 → 10 lines, start 9 → 100, start 18 → 130;
+Verified with `npm test` (241 tests; 19/21 deliberate bugs caught, and the
+other 2 have no observable effect) and a headless-Firefox playthrough (21/21
+checks, M3 and pause checks still 13/13).
+
+- [x] `progression.js` (SPEC §6.3, §8)
+  - [x] `linesToFirstLevelUp(startLevel)`, `levelFromLines(startLevel, lines)`
+  - [x] `scoreBonusLevels(score)` (exact at every threshold), `computeLevel({ startLevel, lines, score })`
+- [x] `game.js`
+  - [x] `lineClear` phase with `clearing = { rows, timer }` for `LINE_CLEAR_FRAMES`,
+        then ARE (26 frames to the next piece vs 6 without a clear); pausable
+  - [x] Recompute level after every lock and clear; emit `levelUp`, start `levelUpFlash`
+  - [x] Title screen: `menuX` adjusts `startLevel` 0–19 (clamped); HUD level follows
+  - [x] High score load/save via injectable `storage` (`localStorage['tetris.hiScore']`),
+        strict parsing, storage errors swallowed
+  - [x] Game over: Enter ignored for `GAME_OVER_DELAY_FRAMES` (1 s); `newHiScore`;
+        → title resets to a clean board/HUD, keeping start level and top score
+- [x] `ui.js`: title level selector (`LEVEL < 05 >`, arrows hidden at the ends),
+      game-over `SCORE` / `NEW TOP` line, delayed `PRESS ENTER`, live TOP,
+      level-up well-frame flash (`.well--flash`)
+- [x] `renderer.js`: line-clear flash + center-out wipe (`lineClearFrame`), tetris
+      full-well flash
+- [x] `main.js`: `?debug` exposes `window.__game` for scripted browser tests
+- [x] Tests: first level-up at start 0 → 10 lines, start 9 → 100, start 18 → 130;
       bonus levels at 9 999 / 10 000 / 30 000 / 60 000; score table × (level+1);
-      level caps at 99.
+      level caps at 99; animation beat table; storage edge cases; reload persistence
 
-**AC:** Starting at level 0, 10 lines → level 1 and pieces visibly speed up;
-HUD updates live; clearing 4 lines at level 0 awards 1200; starting at 19
-feels NES-fast; high score survives a page reload.
+**AC:** Starting at level 0, 10 lines → level 1 and pieces visibly speed up ✅
+(43 frames/row, unit-tested); HUD updates live ✅; clearing 4 lines at level 0
+awards 1200 ✅; high score survives a page reload ✅ (browser-verified).
+*Starting at 19 "feels NES-fast" still needs a human to play it.*
 
 ---
 

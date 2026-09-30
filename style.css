@@ -189,6 +189,24 @@ h1, h2, p, dl, dd, ul {
   white-space: pre-line; /* ui.js may use "\n" for multi-line subtitles */
 }
 
+.overlay__info {
+  color: var(--cyan);
+  white-space: pre;      /* keep the blank where a level arrow is hidden: "LEVEL   00 >" */
+}
+
+.overlay__info[hidden],
+.overlay__sub:empty {
+  display: none;
+}
+
+/* Level-up: the well frame flashes bright for LEVEL_UP_FLASH_FRAMES (toggled by ui.js) */
+.well--flash {
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--yellow),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--magenta),
+    0 0 0 var(--px) #000;
+}
+
 .blink {
   animation: blink 1s steps(1, end) infinite;
 }

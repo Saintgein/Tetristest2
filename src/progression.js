@@ -1,10 +1,10 @@
 // ==========================================================================
 //  src/progression.js
-//  Gravity, lock delay and scoring (SPEC §6.3, §8). Level functions arrive in M4.
+//  Gravity, lock delay, scoring and level progression (SPEC §6.3, §8).
 //  Pure, no DOM.
 // ==========================================================================
 
-import { MAX_LEVEL, LOCK_DELAY_FRAMES } from './config.js';
+import { MAX_LEVEL, LOCK_DELAY_FRAMES, SCORE_MILESTONE } from './config.js';
 
 /**
  * Tolerance for the gravity accumulator: step a row when
@@ -59,4 +59,34 @@ const LINE_CLEAR_POINTS = [0, 40, 100, 300, 1200];
 export function scoreForClear(lineCount, level) {
   const base = LINE_CLEAR_POINTS[lineCount] ?? 0;
   return base * (Math.max(0, Math.floor(level)) + 1);
+}
+
+// ---------------------------------------------------------------------------
+// Levels (SPEC §8.2)
+// ---------------------------------------------------------------------------
+
+/** NES rule: lines needed for the first level-up from `startLevel`; then every 10. */
+export function linesToFirstLevelUp(startLevel) {
+  return Math.min(startLevel * 10 + 10, Math.max(100, startLevel * 10 - 50));
+}
+
+/** @returns {number} level earned by lines alone (not clamped). */
+export function levelFromLines(startLevel, lines) {
+  const first = linesToFirstLevelUp(startLevel);
+  return lines < first ? startLevel : startLevel + 1 + Math.floor((lines - first) / 10);
+}
+
+/**
+ * Bonus levels from score milestones: the n-th at SCORE_MILESTONE × n(n+1)/2
+ * (10k, 30k, 60k, 100k, …) so higher-level scoring can't run away with speed.
+ */
+export function scoreBonusLevels(score) {
+  if (!(score > 0)) return 0;
+  // Exact at every threshold for any reachable score (checked to n = 100 000; see tests)
+  return Math.floor((Math.sqrt(1 + (8 * score) / SCORE_MILESTONE) - 1) / 2);
+}
+
+/** @returns {number} current level, 0..MAX_LEVEL */
+export function computeLevel({ startLevel, lines, score }) {
+  return Math.min(MAX_LEVEL, levelFromLines(startLevel, lines) + scoreBonusLevels(score));
 }

@@ -1,33 +1,45 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createUI } from '../src/ui.js';
+import { createUI, overlayContent, isLevelUpFlashOn } from '../src/ui.js';
+import { GAME_OVER_DELAY_FRAMES, LEVEL_UP_FLASH_FRAMES, MAX_START_LEVEL } from '../src/config.js';
 
 /** Minimal stand-in for a DOM element that counts text writes. */
 function fakeElement(text = '') {
   let value = text;
-  return {
+  const el = {
     writes: 0,
     hidden: false,
+    classes: new Set(),
+    classWrites: 0,
+    classList: {
+      toggle(name, on) { this.owner.classWrites++; if (on) this.owner.classes.add(name); else this.owner.classes.delete(name); },
+    },
     get textContent() { return value; },
     set textContent(v) { value = v; this.writes++; },
   };
+  el.classList.owner = el;
+  return el;
 }
 
 function setup() {
   const els = {
     score: fakeElement(), hiScore: fakeElement(), level: fakeElement(), lines: fakeElement(),
     overlay: fakeElement(), overlayTitle: fakeElement(), overlaySub: fakeElement(),
+    overlayInfo: fakeElement(), well: fakeElement(),
   };
   return { els, ui: createUI(els) };
 }
 
-const baseState = (over = {}) => ({ phase: 'playing', score: 0, hiScore: 0, level: 0, lines: 0, ...over });
+const baseState = (over = {}) => ({
+  phase: 'playing', score: 0, hiScore: 0, level: 0, lines: 0, startLevel: 0,
+  gameOverTimer: 0, newHiScore: false, levelUpFlash: 0, ...over,
+});
 
 test('HUD: zero-padded score (6), top (6), level (2), lines (3)', () => {
   const { els, ui } = setup();
-  ui.update(baseState({ score: 1280, hiScore: 45, level: 7, lines: 12 }));
+  ui.update(baseState({ score: 1280, hiScore: 4500, level: 7, lines: 12 }));
   assert.equal(els.score.textContent, '001280');
-  assert.equal(els.hiScore.textContent, '000045');
+  assert.equal(els.hiScore.textContent, '004500');
   assert.equal(els.level.textContent, '07');
   assert.equal(els.lines.textContent, '012');
 });
@@ -86,5 +98,82 @@ test('overlay: prompt fits the 160px well at 8px per character', () => {
     ui.update(baseState({ phase }));
     assert.ok(els.overlaySub.textContent.length * 8 <= 160 - 2 * 6, `${phase} subtitle`);
     assert.ok(els.overlayTitle.textContent.length * 16 <= 160, `${phase} title`);
+  }
+});
+
+// ---------- Milestone 4 ----------
+
+test('title: level selector shows arrows only where another level exists', () => {
+  assert.equal(overlayContent(baseState({ phase: 'title', startLevel: 0 })).info, 'LEVEL   00 >');
+  assert.equal(overlayContent(baseState({ phase: 'title', startLevel: 5 })).info, 'LEVEL < 05 >');
+  assert.equal(overlayContent(baseState({ phase: 'title', startLevel: MAX_START_LEVEL })).info, 'LEVEL < 19  ');
+});
+
+test('title: overlay shows TETRIS, the selector and PRESS ENTER; selector updates live', () => {
+  const { els, ui } = setup();
+  ui.update(baseState({ phase: 'title', startLevel: 3 }));
+  assert.equal(els.overlayTitle.textContent, 'TETRIS');
+  assert.equal(els.overlayInfo.hidden, false);
+  assert.equal(els.overlayInfo.textContent, 'LEVEL < 03 >');
+  assert.equal(els.overlaySub.textContent, 'PRESS ENTER');
+  ui.update(baseState({ phase: 'title', startLevel: 4, level: 4 }));
+  assert.equal(els.overlayInfo.textContent, 'LEVEL < 04 >');
+  assert.equal(els.level.textContent, '04');
+});
+
+test('paused: no info line', () => {
+  const { els, ui } = setup();
+  ui.update(baseState({ phase: 'title' }));
+  ui.update(baseState({ phase: 'paused' }));
+  assert.equal(els.overlayInfo.hidden, true);
+});
+
+test('game over: final score line; NEW TOP when the record was beaten', () => {
+  assert.equal(overlayContent(baseState({ phase: 'gameOver', score: 1234 })).info, 'SCORE 001234');
+  assert.equal(overlayContent(baseState({ phase: 'gameOver', score: 1234, newHiScore: true })).info, 'NEW TOP 001234');
+});
+
+test('game over: PRESS ENTER appears only once Enter is accepted', () => {
+  const { els, ui } = setup();
+  ui.update(baseState({ phase: 'gameOver', gameOverTimer: 0 }));
+  assert.equal(els.overlayTitle.textContent, 'GAME OVER');
+  assert.equal(els.overlaySub.textContent, '');
+  ui.update(baseState({ phase: 'gameOver', gameOverTimer: GAME_OVER_DELAY_FRAMES - 1 }));
+  assert.equal(els.overlaySub.textContent, '');
+  ui.update(baseState({ phase: 'gameOver', gameOverTimer: GAME_OVER_DELAY_FRAMES }));
+  assert.equal(els.overlaySub.textContent, 'PRESS ENTER');
+});
+
+test('TOP tracks a new record live during play', () => {
+  const { els, ui } = setup();
+  ui.update(baseState({ score: 300, hiScore: 1000 }));
+  assert.equal(els.hiScore.textContent, '001000');
+  ui.update(baseState({ score: 1500, hiScore: 1000 }));
+  assert.equal(els.hiScore.textContent, '001500');
+});
+
+test('level-up: well frame flashes in 4-frame beats, then stops', () => {
+  const beats = [];
+  for (let f = LEVEL_UP_FLASH_FRAMES; f >= 0; f--) beats.push(isLevelUpFlashOn({ levelUpFlash: f }) ? 1 : 0);
+  assert.equal(beats[0], 1, 'on immediately');
+  assert.equal(beats.at(-1), 0, 'off when finished');
+  assert.ok(beats.includes(0) && beats.slice(0, -1).includes(1));
+
+  const { els, ui } = setup();
+  ui.update(baseState({ levelUpFlash: LEVEL_UP_FLASH_FRAMES }));
+  assert.ok(els.well.classes.has('well--flash'));
+  ui.update(baseState({ levelUpFlash: 0 }));
+  assert.ok(!els.well.classes.has('well--flash'));
+  const writes = els.well.classWrites;
+  ui.update(baseState({ levelUpFlash: 0 }));
+  assert.equal(els.well.classWrites, writes, 'class only touched on change');
+});
+
+test('overlay info lines fit the well', () => {
+  for (const state of [
+    baseState({ phase: 'title', startLevel: 19 }),
+    baseState({ phase: 'gameOver', score: 9_999_999, newHiScore: true }),
+  ]) {
+    assert.ok(overlayContent(state).info.length * 8 <= 160, overlayContent(state).info);
   }
 });

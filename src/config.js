@@ -26,6 +26,9 @@ export const NEXT_COUNT = 3;                      // previews shown
 export const MAX_LEVEL = 99;
 export const MAX_START_LEVEL = 19;
 export const SCORE_MILESTONE = 10_000;            // see SPEC §8.2
+export const LEVEL_UP_FLASH_FRAMES = 30;          // well-border flash after a level-up
+export const GAME_OVER_DELAY_FRAMES = 60;         // Enter ignored for 1 s on the game-over screen
+export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage key
 
 // KeyboardEvent.code values (layout-independent physical keys).
 export const KEY_BINDINGS = {

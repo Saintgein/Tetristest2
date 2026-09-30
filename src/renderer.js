@@ -7,7 +7,7 @@
 // ==========================================================================
 
 import {
-  BLOCK, PREVIEW_BLOCK, COLS, VISIBLE_ROWS, HIDDEN_ROWS, NEXT_COUNT, PALETTE, COLORS,
+  BLOCK, PREVIEW_BLOCK, COLS, VISIBLE_ROWS, HIDDEN_ROWS, NEXT_COUNT, PALETTE, COLORS, LINE_CLEAR_FRAMES,
 } from './config.js';
 import { getCells, TYPE_INDEX } from './pieces.js';
 import { dropDistance } from './board.js';
@@ -15,6 +15,23 @@ import { dropDistance } from './board.js';
 const FLASH_PALETTE = { face: COLORS.flash, light: '#ffffff', dark: '#bcbcbc' };
 const HOLD_USED_ALPHA = 0.4;
 const NEXT_SLOT_HEIGHT = 48;                  // next canvas is 80 × 144 = 3 slots
+const WIPE_STEPS = COLS / 2;                  // column pairs erased center → out
+const BEAT_FRAMES = LINE_CLEAR_FRAMES / WIPE_STEPS;   // 4 frames per beat
+const TETRIS_FLASH_ALPHA = 0.25;
+
+/**
+ * NES-style line-clear animation state for a clearing.timer value (SPEC §6.5):
+ * each 4-frame beat erases one more column pair from the center outward, and
+ * the remaining cells flash white on even beats.
+ * @returns {{ erased: number, flash: boolean }} erased = column pairs gone (0–5)
+ */
+export function lineClearFrame(timer) {
+  const beat = Math.floor(timer / BEAT_FRAMES);
+  return { erased: Math.min(WIPE_STEPS, beat), flash: beat % 2 === 0 };
+}
+
+/** Distance of a column from the well's center pair: 0 for cols 4–5, 4 for cols 0 and 9. */
+const distanceFromCenter = (x) => (x < COLS / 2 ? COLS / 2 - 1 - x : x - COLS / 2);
 
 /** Bevel width for a block size: 2px at 16px, never below 1. */
 const bevelFor = (size) => Math.max(1, Math.round(size / 8));
@@ -179,11 +196,25 @@ export function createRenderer({ boardCanvas, holdCanvas, nextCanvas }, { create
     boardCtx.drawImage(well, 0, 0);
     if (state.phase === 'paused') return;         // NES-style: no peeking at the stack while paused
 
+    const { clearing } = state;
+    const anim = clearing ? lineClearFrame(clearing.timer) : null;
+
     for (let y = HIDDEN_ROWS; y < board.rows; y++) {
       const row = board.cells[y];
+      const clearingRow = anim !== null && clearing.rows.includes(y);
       for (let x = 0; x < board.cols; x++) {
-        if (row[x] !== 0) boardCtx.drawImage(sprites.get(row[x]), x * BLOCK, (y - HIDDEN_ROWS) * BLOCK);
+        if (row[x] === 0) continue;
+        if (clearingRow && distanceFromCenter(x) < anim.erased) continue;
+        const sprite = clearingRow && anim.flash ? sprites.get('flash') : sprites.get(row[x]);
+        boardCtx.drawImage(sprite, x * BLOCK, (y - HIDDEN_ROWS) * BLOCK);
       }
+    }
+
+    if (anim !== null && clearing.rows.length === 4 && anim.flash) {   // tetris: whole well flashes
+      boardCtx.globalAlpha = TETRIS_FLASH_ALPHA;
+      boardCtx.fillStyle = COLORS.flash;
+      boardCtx.fillRect(0, 0, COLS * BLOCK, VISIBLE_ROWS * BLOCK);
+      boardCtx.globalAlpha = 1;
     }
 
     if (!active) return;

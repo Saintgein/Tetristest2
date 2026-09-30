@@ -1,7 +1,8 @@
 // ==========================================================================
 //  src/main.js
 //  Bootstrap: integer pixel scaling + wiring the game modules together.
-//  QA aid: ?level=N (0–99) sets the start level until the M4 level menu.
+//  QA aids: ?level=N (0–99, beyond the menu's 0–19) sets the start level;
+//  ?debug exposes window.__game for scripted browser tests.
 // ==========================================================================
 
 import { MAX_LEVEL } from './config.js';
@@ -36,8 +37,8 @@ function fitScale() {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-const startLevel = clamp(
-  parseInt(new URLSearchParams(location.search).get('level'), 10) || 0, 0, MAX_LEVEL);
+const params = new URLSearchParams(location.search);
+const startLevel = clamp(parseInt(params.get('level'), 10) || 0, 0, MAX_LEVEL);
 
 const game = createGame({
   input: createInput(window),
@@ -54,12 +55,17 @@ const game = createGame({
     overlay: $('overlay'),
     overlayTitle: $('overlay-title'),
     overlaySub: $('overlay-sub'),
+    overlayInfo: $('overlay-info'),
+    well: $('well'),
   }),
   audio: { play() {} },                        // M5
   initialState: createInitialState({ startLevel }),
 });
 
 game.start();
+
+// QA aid: ?debug exposes the game for scripted browser tests (window.__game.getState()).
+if (params.has('debug')) window.__game = game;
 
 // Auto-pause when the player leaves: tab hidden, window minimized or unfocused.
 document.addEventListener('visibilitychange', () => {

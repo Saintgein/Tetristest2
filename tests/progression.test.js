@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getGravity, GRAVITY_EPSILON, getLockDelay, scoreForClear, SOFT_DROP_POINTS, HARD_DROP_POINTS,
+  linesToFirstLevelUp, levelFromLines, scoreBonusLevels, computeLevel,
 } from '../src/progression.js';
-import { SOFT_DROP_G, LOCK_DELAY_FRAMES } from '../src/config.js';
+import { SOFT_DROP_G, LOCK_DELAY_FRAMES, SCORE_MILESTONE, MAX_LEVEL } from '../src/config.js';
 
 const NES_FRAMES_PER_ROW = [
   48, 43, 38, 33, 28, 23, 18, 13, 8, 6,
@@ -149,4 +150,72 @@ test('scoreForClear: spot checks and invalid counts', () => {
 test('drop points: soft 1 per row, hard 2 per row', () => {
   assert.equal(SOFT_DROP_POINTS, 1);
   assert.equal(HARD_DROP_POINTS, 2);
+});
+
+// ---------- levels ----------
+
+test('linesToFirstLevelUp: NES rule (start 0 → 10, 9 → 100, 18 → 130, 19 → 140)', () => {
+  assert.equal(linesToFirstLevelUp(0), 10);
+  assert.equal(linesToFirstLevelUp(5), 60);
+  assert.equal(linesToFirstLevelUp(9), 100);
+  assert.equal(linesToFirstLevelUp(10), 100);
+  assert.equal(linesToFirstLevelUp(15), 100);
+  assert.equal(linesToFirstLevelUp(16), 110);
+  assert.equal(linesToFirstLevelUp(18), 130);
+  assert.equal(linesToFirstLevelUp(19), 140);
+});
+
+test('levelFromLines: start 0 levels up every 10 lines', () => {
+  assert.equal(levelFromLines(0, 0), 0);
+  assert.equal(levelFromLines(0, 9), 0);
+  assert.equal(levelFromLines(0, 10), 1);
+  assert.equal(levelFromLines(0, 19), 1);
+  assert.equal(levelFromLines(0, 20), 2);
+  assert.equal(levelFromLines(0, 295), 29);
+});
+
+test('levelFromLines: higher start levels wait for the first transition, then every 10', () => {
+  assert.equal(levelFromLines(9, 99), 9);
+  assert.equal(levelFromLines(9, 100), 10);
+  assert.equal(levelFromLines(9, 109), 10);
+  assert.equal(levelFromLines(9, 110), 11);
+  assert.equal(levelFromLines(18, 129), 18);
+  assert.equal(levelFromLines(18, 130), 19);
+  assert.equal(levelFromLines(18, 140), 20);
+  assert.equal(levelFromLines(19, 139), 19);
+  assert.equal(levelFromLines(19, 140), 20);
+});
+
+test('scoreBonusLevels: nth bonus at 10k × n(n+1)/2 — 10k, 30k, 60k, 100k, 150k', () => {
+  assert.equal(SCORE_MILESTONE, 10_000);
+  const cases = [[0, 0], [9_999, 0], [10_000, 1], [29_999, 1], [30_000, 2], [59_999, 2], [60_000, 3],
+    [99_999, 3], [100_000, 4], [150_000, 5], [1_000_000, 13]];
+  for (const [score, bonus] of cases) assert.equal(scoreBonusLevels(score), bonus, `score ${score}`);
+  assert.equal(scoreBonusLevels(-5), 0);
+  assert.equal(scoreBonusLevels(NaN), 0);
+});
+
+test('scoreBonusLevels: exact at every threshold up to 60 bonuses (no float drift)', () => {
+  for (let n = 1; n <= 60; n++) {
+    const threshold = (SCORE_MILESTONE * n * (n + 1)) / 2;
+    assert.equal(scoreBonusLevels(threshold), n, `at ${threshold}`);
+    assert.equal(scoreBonusLevels(threshold - 1), n - 1, `below ${threshold}`);
+  }
+});
+
+test('computeLevel: lines level + score bonus, capped at 99', () => {
+  assert.equal(computeLevel({ startLevel: 0, lines: 0, score: 0 }), 0);
+  assert.equal(computeLevel({ startLevel: 0, lines: 25, score: 0 }), 2);
+  assert.equal(computeLevel({ startLevel: 0, lines: 25, score: 30_000 }), 4);
+  assert.equal(computeLevel({ startLevel: 9, lines: 0, score: 0 }), 9);
+  assert.equal(computeLevel({ startLevel: 19, lines: 2000, score: 50_000_000 }), MAX_LEVEL);
+});
+
+test('computeLevel: never decreases as lines and score grow', () => {
+  let previous = 0;
+  for (let i = 0; i < 2000; i++) {
+    const level = computeLevel({ startLevel: 3, lines: i, score: i * 997 });
+    assert.ok(level >= previous, `step ${i}`);
+    previous = level;
+  }
 });

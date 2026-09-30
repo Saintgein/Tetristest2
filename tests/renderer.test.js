@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { drawBlock, buildBlockSprites, previewOrigin, createRenderer } from '../src/renderer.js';
+import { drawBlock, buildBlockSprites, previewOrigin, createRenderer, lineClearFrame } from '../src/renderer.js';
 import { createBoard } from '../src/board.js';
 import { PIECE_TYPES, TYPE_INDEX } from '../src/pieces.js';
-import { PALETTE, COLORS, BLOCK } from '../src/config.js';
+import { PALETTE, COLORS, BLOCK, LINE_CLEAR_FRAMES } from '../src/config.js';
 import { createFakeCanvas, hex } from './helpers/fake-canvas.js';
 
 const rgb = (px) => px.slice(0, 3);
@@ -266,4 +266,68 @@ test('paused: board shows only the empty well; previews are hidden', () => {
   renderer.render(state);
   assert.deepEqual(rgb(cellCenter(boardCanvas, 4, 21)), hex(PALETTE[TYPE_INDEX.O].face), 'back on resume');
   assert.ok(holdCanvas.bounds());
+});
+
+// ---------- line-clear animation ----------
+
+test('lineClearFrame: 4-frame beats; one more column pair erased per beat; white on even beats', () => {
+  const beats = [];
+  for (let timer = 0; timer < LINE_CLEAR_FRAMES; timer++) {
+    const { erased, flash } = lineClearFrame(timer);
+    beats.push(`${erased}${flash ? 'W' : 'c'}`);
+  }
+  assert.deepEqual(beats, [
+    '0W', '0W', '0W', '0W',
+    '1c', '1c', '1c', '1c',
+    '2W', '2W', '2W', '2W',
+    '3c', '3c', '3c', '3c',
+    '4W', '4W', '4W', '4W',
+  ]);
+  assert.equal(lineClearFrame(LINE_CLEAR_FRAMES).erased, 5, 'fully wiped at the end');
+});
+
+function clearingState(timer, rows = [21]) {
+  const state = playState({ phase: 'lineClear', clearing: { rows, timer } });
+  for (const y of rows) state.board.cells[y].fill(TYPE_INDEX.L);
+  state.board.cells[20][0] = TYPE_INDEX.J;   // a normal row above
+  return state;
+}
+
+/** Per column of board row y: 'W' flash, 'L' L-colored, '.' empty. */
+function rowPattern(canvas, y) {
+  let out = '';
+  for (let x = 0; x < 10; x++) {
+    const px = rgb(cellCenter(canvas, x, y)).join();
+    out += px === hex(COLORS.flash).join() ? 'W' : px === hex(PALETTE[TYPE_INDEX.L].face).join() ? 'L' : px === '0,0,0' ? '.' : '?';
+  }
+  return out;
+}
+
+test('line clear render: cleared rows flash white, then wipe from the center outward', () => {
+  const expected = { 0: 'WWWWWWWWWW', 4: 'LLLL..LLLL', 8: 'WWW....WWW', 12: 'LL......LL', 16: 'W........W' };
+  for (const [timer, pattern] of Object.entries(expected)) {
+    const { boardCanvas, renderer } = setup();
+    renderer.render(clearingState(Number(timer)));
+    assert.equal(rowPattern(boardCanvas, 21), pattern, `timer ${timer}`);
+  }
+});
+
+test('line clear render: other rows draw normally', () => {
+  const { boardCanvas, renderer } = setup();
+  renderer.render(clearingState(0));
+  assert.deepEqual(rgb(cellCenter(boardCanvas, 0, 20)), hex(PALETTE[TYPE_INDEX.J].face));
+});
+
+test('line clear render: tetris flashes the whole well on white beats only', () => {
+  const lift = (canvas) => canvas.pixel(5 * 16 + 8, 2 * 16 + 8)[0];   // an empty cell high up
+  const tetris = [18, 19, 20, 21];
+  const on = setup();
+  on.renderer.render(clearingState(0, tetris));
+  assert.equal(lift(on.boardCanvas), Math.round(0.25 * 252), 'white beat');
+  const off = setup();
+  off.renderer.render(clearingState(4, tetris));
+  assert.equal(lift(off.boardCanvas), 0, 'color beat');
+  const single = setup();
+  single.renderer.render(clearingState(0));
+  assert.equal(lift(single.boardCanvas), 0, 'singles do not flash the well');
 });

@@ -6,14 +6,16 @@
 // ==========================================================================
 
 import {
-  NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS, ARE_FRAMES, MAX_LOCK_RESETS,
+  NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES,
+  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY,
 } from './config.js';
 import {
   createBoard, isValidPosition, lockPiece, findFullRows, clearRows, isLockOut, dropDistance,
 } from './board.js';
 import { createBag, spawnPiece, getKicks } from './pieces.js';
 import {
-  getGravity, getLockDelay, scoreForClear, GRAVITY_EPSILON, SOFT_DROP_POINTS, HARD_DROP_POINTS,
+  getGravity, getLockDelay, scoreForClear, computeLevel,
+  GRAVITY_EPSILON, SOFT_DROP_POINTS, HARD_DROP_POINTS,
 } from './progression.js';
 
 /** Absorbs rAF timestamp jitter (16.66 vs 16.67 ms) so 60 Hz displays get exactly 1 step per frame. */
@@ -55,6 +57,8 @@ export function createInitialState({ startLevel = 0, hiScore = 0, rng = Math.ran
     hiScore,
     stats: { pieces: 0, singles: 0, doubles: 0, triples: 0, tetrises: 0 },
     levelUpFlash: 0,
+    gameOverTimer: 0,            // frames spent on the game-over screen
+    newHiScore: false,           // this game beat the previous top score
   };
 }
 
@@ -62,10 +66,15 @@ export function createInitialState({ startLevel = 0, hiScore = 0, rng = Math.ran
 // Rules (internal helpers; all mutate state)
 // ---------------------------------------------------------------------------
 
-function newGame(state, events) {
+/** Fresh state for the same player: keeps start level, top score, RNG and frame count. */
+function resetState(state) {
   const { startLevel, hiScore, rng, frame } = state;
   Object.assign(state, createInitialState({ startLevel, hiScore, rng }));
   state.frame = frame;
+}
+
+function newGame(state, events) {
+  resetState(state);
   state.phase = 'playing';
   spawnNext(state, events);
 }
@@ -168,28 +177,57 @@ function lockAndAdvance(state, events) {
     return;
   }
 
+  state.active = null;
   const rows = findFullRows(board);
   if (rows.length > 0) {
-    const cleared = clearRows(board, rows);
-    state.score += scoreForClear(cleared, state.level);   // level before the clear
-    state.lines += cleared;
-    state.stats[CLEAR_STATS[cleared]]++;
-    events.push(cleared === 4 ? 'tetris' : 'clear');
+    // Rows stay on the board and flash/wipe first; they collapse when the animation ends.
+    state.clearing = { rows, timer: 0 };
+    state.phase = 'lineClear';
+    events.push(rows.length === 4 ? 'tetris' : 'clear');
+    return;
   }
+  applyLevel(state, events);                      // drop points can cross a score milestone
+  enterAre(state, events);
+}
 
-  // Entry delay before the next piece (M4 inserts the line-clear animation first).
-  state.active = null;
+/** End of the line-clear animation: collapse rows, score, level, then ARE. */
+function finishLineClear(state, events) {
+  const cleared = clearRows(state.board, state.clearing.rows);
+  state.clearing = null;
+  state.score += scoreForClear(cleared, state.level);     // level before the clear
+  state.lines += cleared;
+  state.stats[CLEAR_STATS[cleared]]++;
+  applyLevel(state, events);
+  enterAre(state, events);
+}
+
+/** Entry delay before the next piece. */
+function enterAre(state, events) {
   if (ARE_FRAMES > 0) {
     state.phase = 'are';
     state.areTimer = ARE_FRAMES;
   } else {
+    state.phase = 'playing';
     spawnNext(state, events);
+  }
+}
+
+/** Recomputes the level from lines + score (SPEC §8.2); it only ever goes up. */
+function applyLevel(state, events) {
+  const level = computeLevel(state);
+  if (level > state.level) {
+    state.level = level;
+    state.levelUpFlash = LEVEL_UP_FLASH_FRAMES;
+    events.push('levelUp');
   }
 }
 
 function gameOver(state, events) {
   state.phase = 'gameOver';
   state.active = null;
+  state.clearing = null;
+  state.gameOverTimer = 0;
+  state.newHiScore = state.score > state.hiScore;
   state.hiScore = Math.max(state.hiScore, state.score);
   events.push('gameOver');
 }
@@ -263,15 +301,30 @@ function updatePlaying(state, actions, events) {
  */
 export function update(state, actions, events) {
   state.frame++;
+
+  if (IN_GAME_PHASES.has(state.phase)) {
+    if (actions.pause) {
+      pauseGame(state);
+      events.push('pause');
+      return;
+    }
+    if (state.levelUpFlash > 0) state.levelUpFlash--;
+  }
+
   switch (state.phase) {
     case 'title':
+      if (actions.menuX !== 0) selectStartLevel(state, actions.menuX, events);
       if (actions.start) newGame(state, events);
       break;
     case 'gameOver':
-      if (actions.start) state.phase = 'title';
+      state.gameOverTimer++;
+      if (actions.start && state.gameOverTimer >= GAME_OVER_DELAY_FRAMES) {
+        resetState(state);                        // clean board and HUD on the title screen
+        state.phase = 'title';
+      }
       break;
     case 'paused':
-      // Nothing advances: gravity, lock delay and ARE resume exactly where they stopped.
+      // Nothing advances: gravity, lock delay, ARE and line clears resume exactly where they stopped.
       if (actions.pause) {
         state.phase = state.pausedFrom;
         state.pausedFrom = null;
@@ -279,19 +332,13 @@ export function update(state, actions, events) {
       }
       break;
     case 'playing':
-      if (actions.pause) {
-        pauseGame(state);
-        events.push('pause');
-        break;
-      }
       updatePlaying(state, actions, events);
       break;
+    case 'lineClear':
+      state.clearing.timer++;
+      if (state.clearing.timer >= LINE_CLEAR_FRAMES) finishLineClear(state, events);
+      break;
     case 'are':
-      if (actions.pause) {
-        pauseGame(state);
-        events.push('pause');
-        break;
-      }
       state.areTimer--;
       if (state.areTimer <= 0) {
         state.phase = 'playing';
@@ -301,12 +348,58 @@ export function update(state, actions, events) {
   }
 }
 
-/** Pauses an in-progress game (playing or ARE). @returns {boolean} whether it paused */
+/** Title screen: ←/→ pick the start level 0..MAX_START_LEVEL (clamped). */
+function selectStartLevel(state, dir, events) {
+  const level = Math.min(MAX_START_LEVEL, Math.max(0, state.startLevel + dir));
+  if (level === state.startLevel) return;
+  state.startLevel = level;
+  state.level = level;                            // HUD shows the choice
+  events.push('move');
+}
+
+const IN_GAME_PHASES = new Set(['playing', 'lineClear', 'are']);
+
+/** Pauses an in-progress game (playing, line clear or ARE). @returns {boolean} whether it paused */
 export function pauseGame(state) {
-  if (state.phase !== 'playing' && state.phase !== 'are') return false;
+  if (!IN_GAME_PHASES.has(state.phase)) return false;
   state.pausedFrom = state.phase;
   state.phase = 'paused';
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// High score persistence (SPEC §8.4)
+// ---------------------------------------------------------------------------
+
+/** @returns {number} stored top score, or 0 if missing, invalid or storage is unavailable. */
+export function loadHiScore(storage) {
+  try {
+    const raw = storage?.getItem(HI_SCORE_KEY) ?? '';
+    if (!/^\d+$/.test(raw)) return 0;             // parseInt would accept '12abc' or '1e999'
+    const value = Number(raw);
+    return Number.isSafeInteger(value) ? value : 0;
+  } catch {
+    return 0;                                     // e.g. storage blocked by privacy settings
+  }
+}
+
+/** @returns {boolean} whether it was written */
+export function saveHiScore(storage, score) {
+  try {
+    if (!storage) return false;
+    storage.setItem(HI_SCORE_KEY, String(score));
+    return true;
+  } catch {
+    return false;                                 // quota / privacy mode: keep playing
+  }
+}
+
+function defaultStorage() {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +445,12 @@ export function createGame({
   ui,
   audio,
   initialState = createInitialState(),
+  storage = defaultStorage(),
   raf = (cb) => requestAnimationFrame(cb),
   caf = (id) => cancelAnimationFrame(id),
 }) {
   const state = initialState;
+  state.hiScore = Math.max(state.hiScore, loadHiScore(storage));
   const clock = createClock();
   const events = [];
   let running = false;
@@ -369,6 +464,9 @@ export function createGame({
       update(state, input.poll(), events);
       for (const e of events) audio.play(e);
       if (state.phase !== prevPhase && touchesMenu(prevPhase, state.phase)) input.reset();
+      if (state.phase === 'gameOver' && prevPhase !== 'gameOver' && state.newHiScore) {
+        saveHiScore(storage, state.hiScore);
+      }
     }
     renderer.render(state);
     ui.update(state);

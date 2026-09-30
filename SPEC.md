@@ -130,6 +130,9 @@ export const NEXT_COUNT = 3;                      // previews shown
 export const MAX_LEVEL = 99;
 export const MAX_START_LEVEL = 19;
 export const SCORE_MILESTONE = 10_000;            // see §8.2
+export const LEVEL_UP_FLASH_FRAMES = 30;          // well-border flash after a level-up
+export const GAME_OVER_DELAY_FRAMES = 60;         // Enter ignored for 1 s on the game-over screen
+export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage key
 
 export const KEY_BINDINGS = {
   left:      ['ArrowLeft', 'KeyA'],
@@ -344,7 +347,11 @@ spec pixel : 2×2 white-ish at (3,3) for 16-bit sheen   ┘
   piece's hidden-row cells are clipped.
 - Line-clear FX: during `lineClear` phase, cleared rows flash white on even
   4-frame intervals and wipe from the center outward (NES-style), driven by
-  `state.clearing.timer / LINE_CLEAR_FRAMES`.
+  `state.clearing.timer / LINE_CLEAR_FRAMES`. `lineClearFrame(timer)` →
+  `{ erased, flash }`: beat = ⌊timer / 4⌋, `erased` = column pairs gone from
+  the center (cols 4–5 first, 0 and 9 last), `flash` = even beat. A tetris
+  also washes the whole well with `COLORS.flash` at 25% on white beats.
+- Level-up FX: DOM, not canvas — `ui.js` toggles `.well--flash` on the well frame.
 - Hold/Next canvases: pieces in spawn rotation, centered in their slot (hold
   80×48; next 80×144 = three 48px slots, top to bottom); hold is drawn dimmed
   (globalAlpha 0.4) when `hold.used` is true. Both are blank on the title
@@ -361,18 +368,21 @@ export function createUI(elements): UI;
  */
 ```
 
-`elements` = `{ score, hiScore, level, lines, overlay, overlayTitle, overlaySub }`.
-Overlay content per phase:
+`elements` = `{ score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo?, well? }`.
+Overlay content per phase (`overlayContent(state)`, exported). The info line
+doesn't blink; the sub line does:
 
-| phase      | title                    | sub                   |
-|------------|--------------------------|-----------------------|
-| `title`    | `TETRIS`                 | `LEVEL < 00 >` / `PRESS ENTER` |
-| `paused`   | `PAUSED`                 | `PRESS P TO RESUME`   |
-| `gameOver` | `GAME OVER`              | `SCORE 000000` / `PRESS ENTER` |
-| otherwise  | *(overlay hidden)*       |                       |
+| phase      | title       | info                                   | sub                   |
+|------------|-------------|----------------------------------------|-----------------------|
+| `title`    | `TETRIS`    | `LEVEL < 05 >` (arrow hidden at 0 / 19) | `PRESS ENTER`         |
+| `paused`   | `PAUSED`    | *(hidden)*                             | `PRESS P TO RESUME`   |
+| `gameOver` | `GAME OVER` | `SCORE 001234` or `NEW TOP 001234`     | `PRESS ENTER` once `gameOverTimer ≥ GAME_OVER_DELAY_FRAMES`, else empty |
+| otherwise  | *(overlay hidden)* |                                  |                       |
 
 Number formatting: score 6 digits zero-padded (7+ when exceeded), level 2
-digits, lines 3 digits.
+digits, lines 3 digits. TOP shows `max(hiScore, score)`, so a new record is
+visible live. While `levelUpFlash > 0` the well frame toggles the
+`well--flash` class in 4-frame beats (`isLevelUpFlashOn`).
 
 ### 6.7 `audio.js`
 
@@ -402,7 +412,9 @@ export function createGame({
 }): Game;
 export function createInitialState({ startLevel = 0, hiScore = 0, rng = Math.random } = {}): GameState;
 export function update(state, actions, events): void;   // one 60 Hz tick, pure w.r.t. DOM
-export function pauseGame(state): boolean;              // playing/are → paused; false otherwise
+export function pauseGame(state): boolean;              // playing/lineClear/are → paused; false otherwise
+export function loadHiScore(storage): number;           // 0 if missing/invalid/unavailable
+export function saveHiScore(storage, score): boolean;   // never throws
 
 // Fixed-timestep clock (pure; see §9)
 export function createClock(): { last: number | null, acc: number };
@@ -457,6 +469,8 @@ const state = {
   hiScore: 0,
   stats: { pieces: 0, singles: 0, doubles: 0, triples: 0, tetrises: 0 },
   levelUpFlash: 0,             // frames remaining for level-up FX
+  gameOverTimer: 0,            // frames on the game-over screen (gates Enter)
+  newHiScore: false,           // this game beat the previous top score
 };
 ```
 
@@ -537,7 +551,13 @@ Uses the level *before* the clear is applied. Soft drop +1/row, hard drop
 - **Hold:** allowed once per piece (`hold.used`). Swaps active type with held
   type (or pulls from bag if empty), respawns at spawn position/rotation,
   resets gravity and lock state. `hold.used` clears when a piece locks.
-- On game over: update `hiScore` + persist to `localStorage['tetris.hiScore']`.
+- On game over: `newHiScore = score > hiScore`, `hiScore = max(hiScore, score)`,
+  `gameOverTimer = 0`. `createGame` loads the stored top score at startup
+  (`loadHiScore`) and saves it (`saveHiScore`) when a game ends with
+  `newHiScore`, under `localStorage[HI_SCORE_KEY]` (`'tetris.hiScore'`). Only a
+  plain digit string is accepted on load, so `'12abc'` and `'1e999'` load as 0.
+  Both functions swallow storage errors (privacy mode, quota), and `storage` is
+  injectable (null = no persistence).
 
 ### 8.5 Rotation
 
@@ -604,12 +624,18 @@ function frame(now) {
 ### 9.1 `update()` — per-phase
 
 ```
-title:     menuX → adjust startLevel (0..MAX_START_LEVEL); start → newGame()
+in-game (playing / lineClear / are): pause → pausedFrom = phase, phase = 'paused'; return
+                                     levelUpFlash counts down
+title:     menuX → startLevel (clamped 0..MAX_START_LEVEL), level = startLevel, 'move'
+           start → newGame()
 paused:    pause → phase = pausedFrom
-gameOver:  start → phase = 'title'
+gameOver:  gameOverTimer++; start && gameOverTimer ≥ GAME_OVER_DELAY_FRAMES
+           → reset state (clean board/HUD; keeps startLevel, hiScore, rng), phase = 'title'
 are:       areTimer--; when 0 → spawnNext()  (block-out check)
-lineClear: clearing.timer++; when ≥ LINE_CLEAR_FRAMES → clearRows, score,
-           recompute level, phase = 'are'
+lineClear: clearing.timer++; when ≥ LINE_CLEAR_FRAMES → clearRows, score (pre-clear
+           level), lines, stats, recompute level, phase = 'are'
+           (a clear takes LINE_CLEAR_FRAMES + ARE_FRAMES = 26 frames before the next
+           piece, vs ARE_FRAMES = 6 without)
 playing:
   1. pause  → pausedFrom = 'playing', phase = 'paused'; return   (loop resets input)
   2. hold   → tryHold()
@@ -626,8 +652,10 @@ playing:
 
 lockAndAdvance():
   lockPiece → lock-out check → hold.used = false → stats.pieces++
-  rows = findFullRows; if rows.length → clearing = {rows, timer:0}, phase = 'lineClear'
-                       else phase = 'are', areTimer = ARE_FRAMES
+  rows = findFullRows; if rows.length → clearing = {rows, timer:0}, phase = 'lineClear',
+                                         push 'clear' / 'tetris' (sound on the first flash)
+                       else recompute level (drop points can cross a milestone),
+                            phase = 'are', areTimer = ARE_FRAMES
 ```
 
 ---

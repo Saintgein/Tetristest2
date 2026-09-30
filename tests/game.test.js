@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createInitialState, update, createClock, advanceClock, createGame, pauseGame,
+  createInitialState, update, createClock, advanceClock, createGame, pauseGame, loadHiScore, saveHiScore,
 } from '../src/game.js';
 import { emptyActions } from '../src/input.js';
 import { spawnPiece, getAbsoluteCells, TYPE_INDEX, PIECE_TYPES } from '../src/pieces.js';
 import { dropDistance } from '../src/board.js';
-import { STEP_MS, NEXT_COUNT, ARE_FRAMES, MAX_LOCK_RESETS } from '../src/config.js';
-import { getLockDelay } from '../src/progression.js';
+import {
+  STEP_MS, NEXT_COUNT, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES, GAME_OVER_DELAY_FRAMES,
+  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL,
+} from '../src/config.js';
+import { getLockDelay, getGravity } from '../src/progression.js';
 
 // ---------- helpers ----------
 
@@ -43,6 +46,20 @@ function run(state, n, actions = A()) {
   return events;
 }
 
+/** Runs the line-clear animation to the end (rows collapse, score/lines applied); leaves ARE. */
+function finishClear(state) {
+  assert.equal(state.phase, 'lineClear', 'finishClear() expects the lineClear phase');
+  return run(state, LINE_CLEAR_FRAMES);
+}
+
+/** Waits out the game-over input delay, then presses Enter (→ title). */
+function leaveGameOver(state) {
+  assert.equal(state.phase, 'gameOver');
+  run(state, GAME_OVER_DELAY_FRAMES);
+  update(state, A({ start: true }), []);
+  assert.equal(state.phase, 'title');
+}
+
 /** Runs out the ARE entry delay after a lock so the next piece is spawned. */
 function settle(state) {
   assert.equal(state.phase, 'are', 'settle() expects the ARE phase');
@@ -73,9 +90,9 @@ function fillRow(board, y, exceptCols = []) {
 test('createInitialState: full SPEC §7 shape in the title phase', () => {
   const state = createInitialState({ startLevel: 7, hiScore: 1234, rng: seeded(3) });
   assert.deepEqual(Object.keys(state).sort(), [
-    'active', 'areTimer', 'bag', 'board', 'clearing', 'frame', 'gravityAcc', 'hiScore', 'hold',
-    'level', 'levelUpFlash', 'lines', 'lock', 'pausedFrom', 'phase', 'queue', 'rng', 'score',
-    'startLevel', 'stats',
+    'active', 'areTimer', 'bag', 'board', 'clearing', 'frame', 'gameOverTimer', 'gravityAcc',
+    'hiScore', 'hold', 'level', 'levelUpFlash', 'lines', 'lock', 'newHiScore', 'pausedFrom',
+    'phase', 'queue', 'rng', 'score', 'startLevel', 'stats',
   ]);
   assert.equal(state.phase, 'title');
   assert.equal(state.level, 7);
@@ -131,9 +148,10 @@ test('gameOver: waits for start → title → start gives a fresh board, same se
   assert.equal(state.phase, 'gameOver');
 
   run(state, 10);
-  assert.equal(state.phase, 'gameOver');
   update(state, A({ start: true }), []);
-  assert.equal(state.phase, 'title');
+  assert.equal(state.phase, 'gameOver', 'Enter ignored during the game-over delay');
+  leaveGameOver(state);
+  assert.equal(filledCount(state.board), 0, 'title shows a clean board');
   update(state, A({ start: true }), []);
   assert.equal(state.phase, 'playing');
   assert.equal(filledCount(state.board), 0);
@@ -370,6 +388,7 @@ test('single: row 21 open at cols 3–6, I hard drop clears it', () => {
   fillRow(state.board, 21, [3, 4, 5, 6]);
   state.active = spawnPiece('I');
   const events = run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
   assert.equal(state.lines, 1);
   assert.equal(state.stats.singles, 1);
   assert.equal(filledCount(state.board), 0);
@@ -382,6 +401,7 @@ test('double: stack above cleared rows shifts down', () => {
   fillRow(state.board, 21, [0]);
   state.active = { type: 'I', rotation: 3, x: -1, y: 2 };   // column 0, rows y..y+3
   run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
   assert.equal(state.lines, 2);
   assert.equal(state.stats.doubles, 1);
   // I's upper two cells (rows 18–19) drop to rows 20–21
@@ -395,6 +415,7 @@ test('tetris: rows 18–21 open at col 0, vertical I clears all four', () => {
   for (let y = 18; y < 22; y++) fillRow(state.board, y, [0]);
   state.active = { type: 'I', rotation: 3, x: -1, y: 2 };
   const events = run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
   assert.equal(state.lines, 4);
   assert.equal(state.stats.tetrises, 1);
   assert.equal(filledCount(state.board), 0);
@@ -408,6 +429,7 @@ test('lines accumulate across clears', () => {
     fillRow(state.board, 21, [3, 4, 5, 6]);
     state.active = spawnPiece('I');
     run(state, 1, A({ hardDrop: true }));
+    finishClear(state);
     settle(state);
   }
   assert.equal(state.lines, 3);
@@ -630,7 +652,7 @@ function fakeRaf() {
   return api;
 }
 
-function loopHarness({ level = 0 } = {}) {
+function loopHarness({ level = 0, storage = null } = {}) {
   const clock = fakeRaf();
   const input = {
     queue: [], resets: 0, polls: 0,
@@ -643,6 +665,7 @@ function loopHarness({ level = 0 } = {}) {
   const game = createGame({
     input, renderer, ui, audio,
     initialState: createInitialState({ startLevel: level, rng: seeded(5) }),
+    storage,
     raf: clock.raf, caf: clock.caf,
   });
   let t = 1000;
@@ -768,7 +791,9 @@ test('score: single at level 0 = 40 + hard drop 2/row', () => {
   fillRow(state.board, 21, [3, 4, 5, 6]);
   state.active = spawnPiece('I');            // row 1 → row 21 = 20 rows
   run(state, 1, A({ hardDrop: true }));
-  assert.equal(state.score, 40 + 2 * 20);
+  assert.equal(state.score, 2 * 20, 'drop points immediately');
+  finishClear(state);
+  assert.equal(state.score, 40 + 2 * 20, 'clear points when the rows collapse');
 });
 
 test('score: line clears use (level + 1) — tetris at level 9 = 12 000', () => {
@@ -776,6 +801,7 @@ test('score: line clears use (level + 1) — tetris at level 9 = 12 000', () => 
   for (let y = 18; y < 22; y++) fillRow(state.board, y, [0]);
   state.active = { type: 'I', rotation: 3, x: -1, y: 2 };   // rows 2–5 → 18–21 = 16 rows
   run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
   assert.equal(state.score, 12000 + 2 * 16);
 });
 
@@ -786,6 +812,7 @@ test('score: double and triple values at level 5', () => {
     state.active = { type: 'I', rotation: 3, x: -1, y: 10 };
     const distance = dropDistance(state.board, state.active);
     run(state, 1, A({ hardDrop: true }));
+    finishClear(state);
     assert.equal(state.lines, rows);
     assert.equal(state.score, points + 2 * distance, `${rows} lines`);
   }
@@ -828,6 +855,7 @@ test('hiScore: raised at game over, never lowered', () => {
   fillRow(state.board, 21, [3, 4, 5, 6]);
   state.active = spawnPiece('I');
   run(state, 1, A({ hardDrop: true }));      // 80 points
+  finishClear(state);
   state.board.cells[1][4] = 1;
   settle(state);
   assert.equal(state.phase, 'gameOver');
@@ -848,7 +876,8 @@ test('score resets on a new game, hiScore carries over', () => {
   settle(state);
   const top = state.hiScore;
   assert.ok(top > 0);
-  update(state, A({ start: true }), []);
+  leaveGameOver(state);
+  assert.equal(state.score, 0, 'title HUD already reset');
   update(state, A({ start: true }), []);
   assert.equal(state.score, 0);
   assert.equal(state.hiScore, top);
@@ -1117,13 +1146,17 @@ test('ARE: gameplay input is ignored', () => {
   assert.equal(state.score, score);
 });
 
-test('ARE follows line clears too', () => {
+test('line clear: lineClear animation first, then the normal ARE', () => {
   const state = started();
   fillRow(state.board, 21, [3, 4, 5, 6]);
   state.active = spawnPiece('I');
   run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.phase, 'lineClear');
+  finishClear(state);
   assert.equal(state.lines, 1);
   assert.equal(state.phase, 'are');
+  settle(state);
+  assert.equal(state.phase, 'playing');
 });
 
 // ---------- ghost projection ----------
@@ -1356,4 +1389,371 @@ test('loop: resuming continues at normal speed', () => {
   h.frame();                                  // resume frame
   for (let i = 0; i < 5; i++) h.frame();
   assert.equal(h.state.active.y, y + 5, '1 row per frame, no burst');
+});
+
+// ===========================================================================
+// Milestone 4
+// ===========================================================================
+
+/** Sets up a single-line clear with an I piece: row 21 open at cols 3–6. */
+function primeSingle(state) {
+  fillRow(state.board, 21, [3, 4, 5, 6]);
+  state.active = spawnPiece('I');
+}
+
+function fakeStorage(initial = {}) {
+  const data = new Map(Object.entries(initial));
+  return {
+    data,
+    getItem: (k) => (data.has(k) ? data.get(k) : null),
+    setItem: (k, v) => { data.set(k, String(v)); },
+  };
+}
+
+// ---------- level progression ----------
+
+test('level: 10th line at start level 0 → level 1, levelUp event, flash starts', () => {
+  const state = started();
+  state.lines = 9;
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.level, 0, 'unchanged while the rows are still flashing');
+  const events = finishClear(state);
+  assert.equal(state.lines, 10);
+  assert.equal(state.level, 1);
+  assert.ok(events.includes('levelUp'));
+  assert.equal(state.levelUpFlash, LEVEL_UP_FLASH_FRAMES);
+});
+
+test('level: clear points use the level before the level-up', () => {
+  const state = started();
+  state.lines = 9;
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
+  assert.equal(state.score, 40 * 1 + 2 * 20, 'level 0 value, not level 1');
+});
+
+test('level: the next piece falls at the new level speed', () => {
+  const state = started();
+  state.lines = 9;
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
+  settle(state);
+  assert.equal(getGravity(state.level), 1 / 43);
+  const y = state.active.y;
+  run(state, 42);
+  assert.equal(state.active.y, y);
+  run(state, 1);
+  assert.equal(state.active.y, y + 1, 'level 1: 43 frames per row');
+});
+
+test('level: every 10 lines from start 0 (20 lines → level 2)', () => {
+  const state = started();
+  state.lines = 19;
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
+  assert.equal(state.level, 2);
+});
+
+test('level: higher start levels wait for the NES first transition', () => {
+  const state = started({ level: 5 });       // first level-up at 60 lines
+  state.lines = 58;
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
+  assert.equal(state.level, 5, '59 lines');
+  settle(state);
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
+  assert.equal(state.level, 6, '60 lines');
+});
+
+test('level: crossing a score milestone levels up on any lock, not just clears', () => {
+  const state = started();
+  state.score = 9_990;
+  state.active = spawnPiece('T');
+  state.active.y = 1;                         // hard drop 19 rows = 38 points → 10 028
+  const events = run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.level, 1);
+  assert.ok(events.includes('levelUp'));
+  assert.equal(state.lines, 0);
+});
+
+test('level: no levelUp event when the level does not change', () => {
+  const state = started();
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  assert.ok(!finishClear(state).includes('levelUp'));
+  assert.equal(state.levelUpFlash, 0);
+});
+
+test('level: the level-up flash counts down during play and freezes while paused', () => {
+  const state = started();
+  state.lines = 9;
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  finishClear(state);
+  run(state, 10);
+  assert.equal(state.levelUpFlash, LEVEL_UP_FLASH_FRAMES - 10);
+  run(state, 1, A({ pause: true }));
+  run(state, 50);
+  assert.equal(state.levelUpFlash, LEVEL_UP_FLASH_FRAMES - 10);
+  run(state, 1, A({ pause: true }));
+  run(state, 100);
+  assert.equal(state.levelUpFlash, 0);
+});
+
+// ---------- start level (title screen) ----------
+
+test('title: ←/→ choose the start level; the HUD level follows', () => {
+  const state = createInitialState({ rng: seeded(1) });
+  const events = run(state, 5, A({ menuX: 1 }));
+  assert.equal(state.startLevel, 5);
+  assert.equal(state.level, 5);
+  assert.deepEqual(events, ['move', 'move', 'move', 'move', 'move']);
+  run(state, 2, A({ menuX: -1 }));
+  assert.equal(state.startLevel, 3);
+});
+
+test('title: start level clamps to 0..MAX_START_LEVEL without events at the ends', () => {
+  const state = createInitialState({ rng: seeded(1) });
+  assert.deepEqual(run(state, 3, A({ menuX: -1 })), []);
+  assert.equal(state.startLevel, 0);
+  run(state, 40, A({ menuX: 1 }));
+  assert.equal(state.startLevel, MAX_START_LEVEL);
+  assert.deepEqual(run(state, 1, A({ menuX: 1 })), []);
+});
+
+test('title: Enter starts at the chosen level with its gravity', () => {
+  const state = createInitialState({ rng: seeded(1) });
+  run(state, 5, A({ menuX: 1 }));
+  update(state, A({ start: true }), []);
+  assert.equal(state.phase, 'playing');
+  assert.equal(state.level, 5);
+  const y = state.active.y;
+  run(state, 23);
+  assert.equal(state.active.y, y + 1, 'level 5: 23 frames per row');
+});
+
+test('title: the chosen start level survives game over → title', () => {
+  const state = createInitialState({ rng: seeded(1) });
+  run(state, 7, A({ menuX: 1 }));
+  update(state, A({ start: true }), []);
+  state.board.cells[1][4] = 1;
+  run(state, 1, A({ hardDrop: true }));
+  settle(state);
+  leaveGameOver(state);
+  assert.equal(state.startLevel, 7);
+  assert.equal(state.level, 7);
+});
+
+test('menuX does nothing outside the title screen', () => {
+  const state = started();
+  run(state, 3, A({ menuX: 1 }));
+  assert.equal(state.startLevel, 0);
+  assert.equal(state.level, 0);
+});
+
+// ---------- line clear phase ----------
+
+test('line clear: rows stay on the board for LINE_CLEAR_FRAMES, then collapse', () => {
+  assert.equal(LINE_CLEAR_FRAMES, 20);
+  const state = started();
+  primeSingle(state);
+  const events = run(state, 1, A({ hardDrop: true }));
+  assert.deepEqual(events, ['hardDrop', 'lock', 'clear'], 'sound cue at the start of the animation');
+  assert.deepEqual(state.clearing, { rows: [21], timer: 0 });
+  assert.equal(state.active, null);
+  for (let i = 1; i < LINE_CLEAR_FRAMES; i++) {
+    run(state, 1);
+    assert.equal(state.phase, 'lineClear', `frame ${i}`);
+    assert.equal(state.clearing.timer, i);
+    assert.equal(filledCount(state.board), 10, 'row still present');
+  }
+  run(state, 1);
+  assert.equal(state.phase, 'are');
+  assert.equal(state.clearing, null);
+  assert.equal(filledCount(state.board), 0);
+});
+
+test('line clear: next piece arrives LINE_CLEAR_FRAMES + ARE_FRAMES after the lock', () => {
+  const state = started();
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  run(state, LINE_CLEAR_FRAMES + ARE_FRAMES - 1);
+  assert.equal(state.active, null);
+  run(state, 1);
+  assert.equal(state.phase, 'playing');
+  assert.ok(state.active);
+});
+
+test('line clear: records all cleared rows, including non-adjacent ones', () => {
+  const state = started();
+  fillRow(state.board, 19, [0]);
+  fillRow(state.board, 21, [0]);
+  fillRow(state.board, 20, [0, 5]);          // not completed by the I
+  state.active = { type: 'I', rotation: 3, x: -1, y: 2 };
+  run(state, 1, A({ hardDrop: true }));
+  assert.deepEqual(state.clearing.rows, [19, 21]);
+  finishClear(state);
+  assert.equal(state.lines, 2);
+});
+
+test('line clear: gameplay input is ignored during the animation', () => {
+  const state = started();
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  const score = state.score;
+  run(state, 10, A({ hardDrop: true, hold: true, shift: 1, rotate: 1, softDrop: true }));
+  assert.equal(state.phase, 'lineClear');
+  assert.equal(state.score, score);
+  assert.equal(state.hold.type, null);
+});
+
+test('line clear: pause freezes the animation and resumes into it', () => {
+  const state = started();
+  primeSingle(state);
+  run(state, 1, A({ hardDrop: true }));
+  run(state, 5);
+  run(state, 1, A({ pause: true }));
+  assert.equal(state.pausedFrom, 'lineClear');
+  run(state, 100);
+  assert.equal(state.clearing.timer, 5);
+  run(state, 1, A({ pause: true }));
+  assert.equal(state.phase, 'lineClear');
+  run(state, LINE_CLEAR_FRAMES - 6);
+  assert.equal(state.phase, 'lineClear');
+  run(state, 1);
+  assert.equal(state.phase, 'are');
+});
+
+test('line clear: tetris stats and score applied when the rows collapse', () => {
+  const state = started();
+  for (let y = 18; y < 22; y++) fillRow(state.board, y, [0]);
+  state.active = { type: 'I', rotation: 3, x: -1, y: 2 };
+  assert.ok(run(state, 1, A({ hardDrop: true })).includes('tetris'));
+  assert.equal(state.stats.tetrises, 0);
+  finishClear(state);
+  assert.equal(state.stats.tetrises, 1);
+  assert.equal(state.score, 1200 + 2 * 16);
+});
+
+// ---------- game over ----------
+
+test('game over: Enter is ignored for GAME_OVER_DELAY_FRAMES, then returns to title', () => {
+  assert.equal(GAME_OVER_DELAY_FRAMES, 60);
+  const state = started();
+  state.board.cells[1][4] = 1;
+  run(state, 1, A({ hardDrop: true }));
+  settle(state);
+  assert.equal(state.phase, 'gameOver');
+  run(state, GAME_OVER_DELAY_FRAMES - 1, A({ start: true }));
+  assert.equal(state.phase, 'gameOver');
+  assert.equal(state.gameOverTimer, GAME_OVER_DELAY_FRAMES - 1);
+  run(state, 1, A({ start: true }));
+  assert.equal(state.phase, 'title');
+});
+
+test('game over: newHiScore only when the previous top is beaten', () => {
+  const beat = started();
+  beat.hiScore = 10;
+  beat.board.cells[1][4] = 1;
+  run(beat, 1, A({ hardDrop: true }));       // 38 points
+  settle(beat);
+  assert.equal(beat.newHiScore, true);
+  assert.equal(beat.hiScore, 38);
+
+  const miss = started();
+  miss.hiScore = 500;
+  miss.board.cells[1][4] = 1;
+  run(miss, 1, A({ hardDrop: true }));
+  settle(miss);
+  assert.equal(miss.newHiScore, false);
+  assert.equal(miss.hiScore, 500);
+});
+
+test('game over → title: board, score, lines, stats and flags reset; top score kept', () => {
+  const state = started({ level: 3 });
+  state.lines = 42;
+  state.board.cells[1][4] = 1;
+  state.board.cells[21].fill(2);
+  state.board.cells[21][0] = 0;
+  run(state, 1, A({ hardDrop: true }));
+  settle(state);
+  const top = state.hiScore;
+  leaveGameOver(state);
+  assert.equal(filledCount(state.board), 0);
+  assert.deepEqual([state.score, state.lines, state.level, state.stats.pieces], [0, 0, 3, 0]);
+  assert.equal(state.newHiScore, false);
+  assert.equal(state.gameOverTimer, 0);
+  assert.equal(state.hiScore, top);
+});
+
+// ---------- high score persistence ----------
+
+test('loadHiScore: reads a stored integer; anything else → 0', () => {
+  assert.equal(HI_SCORE_KEY, 'tetris.hiScore');
+  assert.equal(loadHiScore(fakeStorage({ [HI_SCORE_KEY]: '12345' })), 12345);
+  for (const bad of ['', 'abc', '-5', '0', '1e999', '12abc', ' 42', '4.5', '99999999999999999999']) {
+    assert.equal(loadHiScore(fakeStorage({ [HI_SCORE_KEY]: bad })), 0, JSON.stringify(bad));
+  }
+  assert.equal(loadHiScore(fakeStorage()), 0);
+  assert.equal(loadHiScore(null), 0);
+  assert.equal(loadHiScore({ getItem() { throw new Error('SecurityError'); } }), 0);
+});
+
+test('saveHiScore: writes under the key; never throws', () => {
+  const storage = fakeStorage();
+  assert.equal(saveHiScore(storage, 777), true);
+  assert.equal(storage.data.get(HI_SCORE_KEY), '777');
+  assert.equal(saveHiScore(null, 1), false);
+  assert.equal(saveHiScore({ setItem() { throw new Error('QuotaExceededError'); } }, 1), false);
+});
+
+test('createGame: loads the stored top score at startup', () => {
+  const h = loopHarness({ storage: fakeStorage({ [HI_SCORE_KEY]: '4321' }) });
+  assert.equal(h.state.hiScore, 4321);
+});
+
+test('createGame: saves a new top score at game over; survives a "reload"', () => {
+  const storage = fakeStorage({ [HI_SCORE_KEY]: '10' });
+  const h = loopHarness({ storage });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  h.state.board.cells[1][4] = 1;
+  h.input.queue.push(A({ hardDrop: true }));
+  for (let i = 0; i <= ARE_FRAMES; i++) h.frame();
+  assert.equal(h.state.phase, 'gameOver');
+  assert.ok(h.state.hiScore > 10);
+  assert.equal(storage.data.get(HI_SCORE_KEY), String(h.state.hiScore));
+
+  const reloaded = loopHarness({ storage });
+  assert.equal(reloaded.state.hiScore, h.state.hiScore);
+});
+
+test('createGame: does not overwrite a better stored score', () => {
+  const storage = fakeStorage({ [HI_SCORE_KEY]: '999999' });
+  const h = loopHarness({ storage });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  h.state.board.cells[1][4] = 1;
+  h.input.queue.push(A({ hardDrop: true }));
+  for (let i = 0; i <= ARE_FRAMES; i++) h.frame();
+  assert.equal(h.state.phase, 'gameOver');
+  assert.equal(storage.data.get(HI_SCORE_KEY), '999999');
+});
+
+test('createGame: works with no storage available', () => {
+  const h = loopHarness({ storage: null });
+  h.game.start();
+  h.frame();
+  assert.equal(h.state.hiScore, 0);
 });
