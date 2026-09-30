@@ -1,12 +1,13 @@
-// Milestone 0 placeholder bootstrap.
-// Fits the cabinet to the viewport at an integer pixel scale and draws an
-// empty well so the layout can be checked. Milestone 1 moves the constants
-// into config.js and Milestone 2 replaces this with the real game wiring
-// (see TASKS.md).
+// Milestone 2 debug bootstrap.
+// Fits the cabinet to the viewport at an integer pixel scale and renders a
+// static scene (empty well + one I and one T piece) to verify the renderer.
+// The real game loop replaces this wiring in a later milestone.
 
-const BLOCK = 16;
-const COLS = 10;
-const VISIBLE_ROWS = 20;
+import { COLS, ROWS } from './config.js';
+import { createBoard } from './board.js';
+import { spawnPiece } from './pieces.js';
+import { drawBoard, drawPiece } from './renderer.js';
+
 const MAX_SCALE = 6;
 
 const cabinet = document.getElementById('cabinet');
@@ -36,21 +37,24 @@ function getContext(id) {
   return ctx;
 }
 
-function drawEmptyWell(ctx) {
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, COLS * BLOCK, VISIBLE_ROWS * BLOCK);
-  // One dot at each cell corner — classic subtle grid
-  ctx.fillStyle = '#1a1a2e';
-  for (let y = 1; y < VISIBLE_ROWS; y++) {
-    for (let x = 1; x < COLS; x++) {
-      ctx.fillRect(x * BLOCK, y * BLOCK, 1, 1);
-    }
-  }
-}
-
-drawEmptyWell(getContext('board-canvas'));
+// --- Static debug scene ----------------------------------------------------
+const boardCtx = getContext('board-canvas');
 getContext('hold-canvas');
 getContext('next-canvas');
+
+const board = createBoard(COLS, ROWS); // 10 × 22, 2 hidden rows
+
+// Spawn both pieces, then nudge them into the visible well so the debug
+// scene is actually on screen (spawn rows 0–1 are hidden).
+const iPiece = spawnPiece('I');
+iPiece.y = 5;
+const tPiece = spawnPiece('T');
+tPiece.y = 10;
+
+drawBoard(boardCtx, board);
+drawPiece(boardCtx, iPiece);
+drawPiece(boardCtx, tPiece);
+// ---------------------------------------------------------------------------
 
 fitScale();
 window.addEventListener('resize', fitScale);
