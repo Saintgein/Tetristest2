@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getGravity, GRAVITY_EPSILON } from '../src/progression.js';
-import { SOFT_DROP_G } from '../src/config.js';
+import {
+  getGravity, GRAVITY_EPSILON, getLockDelay, scoreForClear, SOFT_DROP_POINTS, HARD_DROP_POINTS,
+} from '../src/progression.js';
+import { SOFT_DROP_G, LOCK_DELAY_FRAMES } from '../src/config.js';
 
 const NES_FRAMES_PER_ROW = [
   48, 43, 38, 33, 28, 23, 18, 13, 8, 6,
@@ -103,4 +105,48 @@ test('soft drop: max(G, SOFT_DROP_G) → 1 row per 2 frames at slow levels, no s
   assert.deepEqual(stepFrames(soft(18), 10), [2, 4, 6, 8, 10]);
   assert.equal(soft(29), getGravity(29));
   assert.equal(soft(99), 20);
+});
+
+// ---------- lock delay ----------
+
+test('getLockDelay: 30 frames through level 29, ramps to 12 at 99', () => {
+  assert.equal(LOCK_DELAY_FRAMES, 30);
+  for (let l = 0; l <= 29; l++) assert.equal(getLockDelay(l), 30, `level ${l}`);
+  assert.equal(getLockDelay(64), 21);
+  assert.equal(getLockDelay(99), 12);
+});
+
+test('getLockDelay: whole frames, never increases, clamps input', () => {
+  for (let l = 1; l <= 99; l++) {
+    assert.ok(Number.isInteger(getLockDelay(l)), `level ${l}`);
+    assert.ok(getLockDelay(l) <= getLockDelay(l - 1), `level ${l}`);
+  }
+  assert.equal(getLockDelay(-3), 30);
+  assert.equal(getLockDelay(500), 12);
+  assert.equal(getLockDelay(NaN), 30);
+});
+
+// ---------- scoring ----------
+
+test('scoreForClear: NES table × (level + 1)', () => {
+  const table = { 1: 40, 2: 100, 3: 300, 4: 1200 };
+  for (const level of [0, 1, 9, 19, 29, 99]) {
+    for (const [lines, points] of Object.entries(table)) {
+      assert.equal(scoreForClear(Number(lines), level), points * (level + 1), `${lines} lines @ ${level}`);
+    }
+  }
+});
+
+test('scoreForClear: spot checks and invalid counts', () => {
+  assert.equal(scoreForClear(4, 0), 1200);
+  assert.equal(scoreForClear(4, 9), 12000);
+  assert.equal(scoreForClear(1, 19), 800);
+  assert.equal(scoreForClear(0, 10), 0);
+  assert.equal(scoreForClear(5, 10), 0);
+  assert.equal(scoreForClear(-1, 10), 0);
+});
+
+test('drop points: soft 1 per row, hard 2 per row', () => {
+  assert.equal(SOFT_DROP_POINTS, 1);
+  assert.equal(HARD_DROP_POINTS, 2);
 });

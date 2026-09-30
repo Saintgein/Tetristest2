@@ -1,10 +1,10 @@
 // ==========================================================================
 //  src/progression.js
-//  Gravity curve (SPEC §6.3, §8.1). Level/score functions arrive in M4.
+//  Gravity, lock delay and scoring (SPEC §6.3, §8). Level functions arrive in M4.
 //  Pure, no DOM.
 // ==========================================================================
 
-import { MAX_LEVEL } from './config.js';
+import { MAX_LEVEL, LOCK_DELAY_FRAMES } from './config.js';
 
 /**
  * Tolerance for the gravity accumulator: step a row when
@@ -30,4 +30,33 @@ export function getGravity(level) {
   const l = Number.isFinite(level) ? Math.min(MAX_LEVEL, Math.max(0, Math.floor(level))) : 0;
   if (l < NES_FRAMES_PER_ROW.length) return 1 / NES_FRAMES_PER_ROW[l];
   return 1 + ((l - RAMP_START) * (MAX_G - 1)) / (RAMP_END - RAMP_START);
+}
+
+// ---------------------------------------------------------------------------
+// Lock delay (SPEC §8.1)
+// ---------------------------------------------------------------------------
+
+const LOCK_DELAY_MIN = 12;   // frames at level 99 (LOCK_DELAY_FRAMES through level 29)
+
+/** @returns {number} frames a grounded piece waits before locking. */
+export function getLockDelay(level) {
+  const l = Number.isFinite(level) ? Math.min(MAX_LEVEL, Math.max(0, Math.floor(level))) : 0;
+  if (l <= RAMP_START) return LOCK_DELAY_FRAMES;
+  const t = (l - RAMP_START) / (RAMP_END - RAMP_START);
+  return Math.round(LOCK_DELAY_FRAMES - t * (LOCK_DELAY_FRAMES - LOCK_DELAY_MIN));
+}
+
+// ---------------------------------------------------------------------------
+// Scoring (SPEC §8.3, NES)
+// ---------------------------------------------------------------------------
+
+export const SOFT_DROP_POINTS = 1;   // per row moved while soft-dropping
+export const HARD_DROP_POINTS = 2;   // per row of a hard drop
+
+const LINE_CLEAR_POINTS = [0, 40, 100, 300, 1200];
+
+/** @returns {number} points for clearing `lineCount` rows at `level` (level before the clear). */
+export function scoreForClear(lineCount, level) {
+  const base = LINE_CLEAR_POINTS[lineCount] ?? 0;
+  return base * (Math.max(0, Math.floor(level)) + 1);
 }

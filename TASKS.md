@@ -290,19 +290,28 @@ drop already landed in M2).
 
 **Files:** `src/game.js`, `src/renderer.js`, `src/progression.js`, `src/ui.js`
 
-- [ ] `progression.js`: `getLockDelay(level)` (SPEC §8.1)
-- [ ] `game.js`
-  - [ ] Lock delay with move-reset cap + `lowestY` refresh (SPEC §8.1); replaces
+Core logic (done — 155 tests; NES scoring pulled forward from M4):
+
+- [x] `progression.js`: `getLockDelay(level)`, `scoreForClear`, `SOFT_DROP_POINTS`,
+      `HARD_DROP_POINTS` (SPEC §8.1, §8.3)
+- [x] `game.js`
+  - [x] Lock delay with move-reset cap + `lowestY` refresh (SPEC §8.1); replaces
         M2's lock-on-failed-gravity
-  - [ ] `tryHold(state): boolean` — once per piece (SPEC §8.4)
-  - [ ] `are` phase (`ARE_FRAMES`) between lock and spawn
-  - [ ] `paused` phase (P / Esc), auto-pause on `visibilitychange` + `clock.last = null`
+  - [x] `tryHold` — once per piece, swapped-in piece gets the rest of the frame's input (SPEC §8.4)
+  - [x] `are` phase (`ARE_FRAMES`) between lock and spawn, after clears too
+  - [x] Scoring: clears × (level + 1), soft drop 1/row, hard drop 2/row; `hiScore`
+        raised at game over (persistence stays in M4)
+  - [x] Next queue mirrors `bag.peek(NEXT_COUNT)`; ghost = `y + dropDistance()`
+- [x] Tests: lock delay expiry, reset cap, airborne timer, `lowestY` refresh, hold,
+      ARE, scoring, next queue / 7-bag, ghost == hard-drop landing (fuzzed), HUD
+
+Remaining:
+
+- [ ] `paused` phase (P / Esc), auto-pause on `visibilitychange` + `clock.last = null`
 - [ ] `renderer.js` → SPEC §6.5: `buildBlockSprites` cache, `drawBlock(ctx, px, py,
       size, colorIndex, style)` with outline + sheen pixel, ghost (outline),
       hold canvas (dimmed when used), next canvas (3 slots)
 - [ ] `ui.js`: `paused` overlay
-- [ ] Tests: lock delay expiry, reset cap (16th move doesn't reset), `lowestY`
-      refresh; hold swap / empty-hold pull / once-per-piece; ARE length
 
 **AC:** Piece can slide on the floor ~0.5 s before locking and can't stall
 forever (15 resets); hold swaps once per piece; ghost always matches hard-drop
@@ -320,10 +329,9 @@ Goal: the full NES-style difficulty curve and all on-screen information.
 - [ ] `progression.js` (SPEC §6.3, §8)
   - [ ] `linesToFirstLevelUp(startLevel)`, `levelFromLines(startLevel, lines)`
   - [ ] `scoreBonusLevels(score)`, `computeLevel({ startLevel, lines, score })`
-  - [ ] `scoreForClear(lineCount, level)`, `SOFT_DROP_POINTS`, `HARD_DROP_POINTS`
 - [ ] `game.js`
   - [ ] `lineClear` phase with `clearing = { rows, timer }` for `LINE_CLEAR_FRAMES`
-  - [ ] Apply score (pre-clear level), soft/hard-drop points; recompute level; emit `levelUp`
+  - [ ] Recompute level after each lock (score already applied in M3); emit `levelUp`
   - [ ] Title screen: `menuX` adjusts `startLevel` 0–19
   - [ ] High score load/save (`localStorage['tetris.hiScore']`)
 - [ ] `ui.js`: title level selector (`LEVEL < 00 >`), game-over score line

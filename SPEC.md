@@ -469,9 +469,12 @@ const state = {
 - **Lock delay** (`getLockDelay(level)`): `LOCK_DELAY_FRAMES` (30) through
   level 29, then linearly down to 12 frames at level 99.
   - Timer runs while the piece is grounded (`dropDistance === 0`).
-  - A successful move/rotate while grounded resets the timer, up to
-    `MAX_LOCK_RESETS` per piece. Reaching a new `lowestY` restores the reset
-    budget.
+  - A successful move/rotate while the timer is running (`lock.timer > 0`)
+    resets it to 0, up to `MAX_LOCK_RESETS` per piece; after that the timer
+    runs out normally. Moves while airborne don't spend resets. Reaching a new
+    `lowestY` (by falling, not by kicking upward) restores the budget.
+  - Timing: the frame a piece lands counts as timer 1, so it locks
+    `getLockDelay(level) − 1` frames after landing.
   - Hard drop locks immediately.
 
 ### 8.2 Levels

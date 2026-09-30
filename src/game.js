@@ -5,12 +5,16 @@
 //  pushes SFX names into `events`. createGame() owns the rAF loop.
 // ==========================================================================
 
-import { NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS } from './config.js';
+import {
+  NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS, ARE_FRAMES, MAX_LOCK_RESETS,
+} from './config.js';
 import {
   createBoard, isValidPosition, lockPiece, findFullRows, clearRows, isLockOut, dropDistance,
 } from './board.js';
 import { createBag, spawnPiece, getKicks } from './pieces.js';
-import { getGravity, GRAVITY_EPSILON } from './progression.js';
+import {
+  getGravity, getLockDelay, scoreForClear, GRAVITY_EPSILON, SOFT_DROP_POINTS, HARD_DROP_POINTS,
+} from './progression.js';
 
 /** Absorbs rAF timestamp jitter (16.66 vs 16.67 ms) so 60 Hz displays get exactly 1 step per frame. */
 const CLOCK_SLOP_MS = 0.5;
@@ -66,15 +70,62 @@ function newGame(state, events) {
   spawnNext(state, events);
 }
 
+/** Deals the next bag piece and advances the preview queue. */
 function spawnNext(state, events) {
-  state.active = spawnPiece(state.bag.next());
+  const type = state.bag.next();
   state.queue = state.bag.peek(NEXT_COUNT);
+  spawnType(state, type, events);
+}
+
+/** Places a fresh piece of `type` at the spawn position; false on block out. */
+function spawnType(state, type, events) {
+  state.active = spawnPiece(type);
   state.gravityAcc = 0;
   if (!isValidPosition(state.board, state.active)) {
     gameOver(state, events);                      // block out
-    return;
+    return false;
   }
   tryMove(state, 0, 1);                           // drop into view if free (SPEC §8.4)
+  const { lock } = state;
+  lock.timer = 0;
+  lock.resets = 0;
+  lock.lowestY = state.active.y;
+  return true;
+}
+
+/** Hold once per piece: park the active type, bring back the held one (or the next in queue). */
+function tryHold(state, events) {
+  const { hold } = state;
+  if (hold.used) return false;
+  const current = state.active.type;
+  hold.used = true;
+  events.push('hold');
+  if (hold.type === null) {
+    hold.type = current;
+    spawnNext(state, events);
+  } else {
+    const swapped = hold.type;
+    hold.type = current;
+    spawnType(state, swapped, events);
+  }
+  return true;
+}
+
+function isGrounded(state) {
+  const piece = state.active;
+  piece.y++;
+  const blocked = !isValidPosition(state.board, piece);
+  piece.y--;
+  return blocked;
+}
+
+/** Move-reset: a successful move/rotate while the lock timer runs restarts it, up to the cap. */
+function onManipulated(state) {
+  const { lock } = state;
+  if (lock.timer > 0 && lock.resets < MAX_LOCK_RESETS) {
+    lock.timer = 0;
+    lock.resets++;
+  }
 }
 
 /** Moves the active piece if the target is free. Mutates in place, no allocation. */
@@ -120,38 +171,64 @@ function lockAndAdvance(state, events) {
   const rows = findFullRows(board);
   if (rows.length > 0) {
     const cleared = clearRows(board, rows);
+    state.score += scoreForClear(cleared, state.level);   // level before the clear
     state.lines += cleared;
     state.stats[CLEAR_STATS[cleared]]++;
     events.push(cleared === 4 ? 'tetris' : 'clear');
   }
-  spawnNext(state, events);
+
+  // Entry delay before the next piece (M4 inserts the line-clear animation first).
+  state.active = null;
+  if (ARE_FRAMES > 0) {
+    state.phase = 'are';
+    state.areTimer = ARE_FRAMES;
+  } else {
+    spawnNext(state, events);
+  }
 }
 
 function gameOver(state, events) {
   state.phase = 'gameOver';
   state.active = null;
+  state.hiScore = Math.max(state.hiScore, state.score);
   events.push('gameOver');
 }
 
 function updatePlaying(state, actions, events) {
-  if (actions.rotate !== 0 && tryRotate(state, actions.rotate)) events.push('rotate');
+  const { lock } = state;
+
+  if (actions.hold) {
+    tryHold(state, events);
+    if (state.phase !== 'playing') return;        // block out on the swapped-in piece
+  }
+
+  if (actions.rotate !== 0 && tryRotate(state, actions.rotate)) {
+    events.push('rotate');
+    onManipulated(state);
+  }
 
   if (actions.shiftToWall) {
     let moved = false;
     while (tryMove(state, actions.shift, 0)) moved = true;
-    if (moved) events.push('move');
+    if (moved) {
+      events.push('move');
+      onManipulated(state);
+    }
   } else if (actions.shift !== 0 && tryMove(state, actions.shift, 0)) {
     events.push('move');
+    onManipulated(state);
   }
 
   if (actions.hardDrop) {
-    state.active.y += dropDistance(state.board, state.active);
+    const distance = dropDistance(state.board, state.active);
+    state.active.y += distance;
+    state.score += distance * HARD_DROP_POINTS;
     events.push('hardDrop');
     lockAndAdvance(state, events);
     return;
   }
 
-  // Gravity. M2 locks as soon as a row step fails (NES-style); lock delay is M3.
+  // Gravity
   let g = getGravity(state.level);
   if (actions.softDrop) g = Math.max(g, SOFT_DROP_G);
   state.gravityAcc += g;
@@ -159,9 +236,22 @@ function updatePlaying(state, actions, events) {
     state.gravityAcc = Math.max(0, state.gravityAcc - 1);
     if (!tryMove(state, 0, 1)) {
       state.gravityAcc = 0;
-      lockAndAdvance(state, events);
-      return;
+      break;
     }
+    if (actions.softDrop) state.score += SOFT_DROP_POINTS;
+    if (state.active.y > lock.lowestY) {          // new lowest row restores the reset budget
+      lock.lowestY = state.active.y;
+      lock.resets = 0;
+      lock.timer = 0;
+    }
+  }
+
+  // Lock delay (SPEC §8.1)
+  if (isGrounded(state)) {
+    lock.timer++;
+    if (lock.timer >= getLockDelay(state.level)) lockAndAdvance(state, events);
+  } else {
+    lock.timer = 0;
   }
 }
 
@@ -182,6 +272,13 @@ export function update(state, actions, events) {
       break;
     case 'playing':
       updatePlaying(state, actions, events);
+      break;
+    case 'are':
+      state.areTimer--;
+      if (state.areTimer <= 0) {
+        state.phase = 'playing';
+        spawnNext(state, events);                 // may block out → gameOver
+      }
       break;
   }
 }

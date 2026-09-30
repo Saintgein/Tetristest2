@@ -5,7 +5,9 @@ import {
 } from '../src/game.js';
 import { emptyActions } from '../src/input.js';
 import { spawnPiece, getAbsoluteCells, TYPE_INDEX, PIECE_TYPES } from '../src/pieces.js';
-import { STEP_MS, NEXT_COUNT } from '../src/config.js';
+import { dropDistance } from '../src/board.js';
+import { STEP_MS, NEXT_COUNT, ARE_FRAMES, MAX_LOCK_RESETS } from '../src/config.js';
+import { getLockDelay } from '../src/progression.js';
 
 // ---------- helpers ----------
 
@@ -39,6 +41,23 @@ function run(state, n, actions = A()) {
   const events = [];
   for (let i = 0; i < n; i++) update(state, actions, events);
   return events;
+}
+
+/** Runs out the ARE entry delay after a lock so the next piece is spawned. */
+function settle(state) {
+  assert.equal(state.phase, 'are', 'settle() expects the ARE phase');
+  return run(state, ARE_FRAMES);
+}
+
+/** Rows the active piece can still fall — 0 means grounded. */
+function dropDistanceOf(state) {
+  let d = 0;
+  const p = { ...state.active };
+  for (;;) {
+    p.y++;
+    if (getAbsoluteCells(p).some(([x, y]) => y >= 22 || x < 0 || x > 9 || state.board.cells[y][x])) return d;
+    d++;
+  }
 }
 
 const cellsOf = (state) => getAbsoluteCells(state.active).map(([x, y]) => `${x},${y}`).sort();
@@ -98,6 +117,7 @@ test('seeded games deal the same sequence; the queue previews the next pieces', 
   assert.deepEqual(a.queue, b.queue);
   const expectedNext = a.queue[0];
   run(a, 1, A({ hardDrop: true }));
+  settle(a);
   assert.equal(a.active.type, expectedNext);
   assert.equal(a.queue.length, NEXT_COUNT);
 });
@@ -107,6 +127,7 @@ test('gameOver: waits for start → title → start gives a fresh board, same se
   state.board.cells[1][4] = 1;                 // guarantees block out on next spawn
   state.hiScore = 999;
   run(state, 1, A({ hardDrop: true }));
+  settle(state);
   assert.equal(state.phase, 'gameOver');
 
   run(state, 10);
@@ -124,7 +145,7 @@ test('gameOver: waits for start → title → start gives a fresh board, same se
 
 // ---------- gravity physics ----------
 
-test('gravity: levels 0–29 step exactly every framesPerRow frames down the whole well, then lock', () => {
+test('gravity: levels 0–29 step exactly every framesPerRow frames down the whole well, then lock after the delay', () => {
   NES_FRAMES_PER_ROW.forEach((f, level) => {
     const state = started({ level });
     state.active = { type: 'T', rotation: 0, x: 3, y: 1 };
@@ -135,11 +156,12 @@ test('gravity: levels 0–29 step exactly every framesPerRow frames down the who
       update(state, A(), []);
       frame++;
       if (state.stats.pieces === 0 && state.active.y !== y) moves.push(frame);
-      assert.ok(frame <= 21 * f, `level ${level} never locked`);
+      assert.ok(frame <= 20 * f + 60, `level ${level} never locked`);
     }
-    // T falls from y=1 to y=20 (19 rows), and the failed 20th step locks it.
+    // T falls from y=1 to y=20 (19 rows). The landing frame starts the lock
+    // timer at 1, so it locks getLockDelay − 1 frames later.
     assert.deepEqual(moves, Array.from({ length: 19 }, (_, i) => (i + 1) * f), `level ${level} row timing`);
-    assert.equal(frame, 20 * f, `level ${level} lock frame`);
+    assert.equal(frame, 19 * f + getLockDelay(level) - 1, `level ${level} lock frame`);
   });
 });
 
@@ -162,21 +184,37 @@ test('gravity: multi-G levels move floor(n × G) rows until landing', () => {
   assert.equal(state.active.y, 1 + 12);
 });
 
-test('gravity: level 99 (20 G) lands and locks on the first frame', () => {
+test('gravity: level 99 (20 G) lands on the first frame, then locks after its 12-frame delay', () => {
   const state = started({ level: 99 });
   const first = state.active.type;
+  assert.equal(getLockDelay(99), 12);
+  run(state, 1);
+  assert.equal(dropDistanceOf(state), 0, 'on the floor after one frame');
+  run(state, 10);
+  assert.equal(state.stats.pieces, 0, 'still movable on frame 11');
   const events = run(state, 1);
-  assert.equal(state.stats.pieces, 1);
+  assert.equal(state.stats.pieces, 1, 'locks on frame 12');
   assert.ok(events.includes('lock'));
   assert.equal(filledCount(state.board), 4);
   assert.ok(state.board.cells[21].some((v) => v === TYPE_INDEX[first]));
-  assert.equal(state.active.y, 1, 'next piece spawned');
+  settle(state);
+  assert.equal(state.phase, 'playing', 'next piece spawned');
+});
+
+test('gravity: 20 G still leaves time to slide along the floor', () => {
+  const state = started({ level: 99 });
+  run(state, 1);
+  const x = state.active.x;
+  run(state, 3, A({ shift: -1 }));
+  assert.equal(state.active.x, x - 3);
+  assert.equal(state.stats.pieces, 0);
 });
 
 test('gravity: accumulator resets for each new piece', () => {
   const state = started({ level: 0 });
   run(state, 30);                              // acc = 30/48
   run(state, 1, A({ hardDrop: true }));
+  settle(state);
   assert.equal(state.gravityAcc, 0);
   const y = state.active.y;
   run(state, 47);
@@ -195,12 +233,14 @@ test('soft drop: 1 row per 2 frames at level 0, no slowdown at level 29', () => 
   assert.equal(fast.active.y, 1 + 10);
 });
 
-test('soft drop locks the piece when it reaches the floor (no lock delay in M2)', () => {
+test('soft drop lands, then waits out the lock delay (no instant lock)', () => {
   const state = started({ level: 0 });
   state.active = { type: 'T', rotation: 0, x: 3, y: 18 };
-  run(state, 4, A({ softDrop: true }));        // 2 frames → y 19, 2 frames → y 20
+  run(state, 4, A({ softDrop: true }));        // frame 2 → y 19, frame 4 → y 20 (grounded)
+  assert.equal(state.active.y, 20);
+  run(state, 28, A({ softDrop: true }));       // lock timer 1 → 29
   assert.equal(state.stats.pieces, 0);
-  run(state, 2, A({ softDrop: true }));        // failed step → lock
+  run(state, 1, A({ softDrop: true }));        // timer 30 → lock
   assert.equal(state.stats.pieces, 1);
 });
 
@@ -297,7 +337,7 @@ test('rotation is applied before shifting in the same frame', () => {
 
 // ---------- hard drop, locking, clears ----------
 
-test('hard drop from spawn: locks T at the floor and spawns the next piece', () => {
+test('hard drop from spawn: locks T at the floor, then ARE, then the next piece', () => {
   const state = started({ seed: 4 });
   state.active = spawnPiece('T');
   state.active.y = 1;
@@ -309,6 +349,10 @@ test('hard drop from spawn: locks T at the floor and spawns the next piece', () 
   assert.equal(filledCount(state.board), 4);
   assert.deepEqual(events, ['hardDrop', 'lock']);
   assert.equal(state.stats.pieces, 1);
+  assert.equal(state.phase, 'are');
+  assert.equal(state.active, null);
+  settle(state);
+  assert.equal(state.phase, 'playing');
   assert.equal(state.active.type, next);
   assert.equal(state.active.y, 1);
 });
@@ -364,6 +408,7 @@ test('lines accumulate across clears', () => {
     fillRow(state.board, 21, [3, 4, 5, 6]);
     state.active = spawnPiece('I');
     run(state, 1, A({ hardDrop: true }));
+    settle(state);
   }
   assert.equal(state.lines, 3);
   assert.equal(state.stats.singles, 3);
@@ -376,18 +421,19 @@ test('spawn stays in the hidden rows when the row below is blocked', () => {
   for (let x = 3; x <= 6; x++) state.board.cells[2][x] = 1;
   state.active = { type: 'O', rotation: 0, x: -1, y: 18 };  // off to the side
   run(state, 1, A({ hardDrop: true }));
+  settle(state);
   assert.equal(state.phase, 'playing');
   assert.equal(state.active.y, 0);
 });
 
-test('block out: next spawn overlaps the stack → gameOver', () => {
+test('block out: next spawn (after ARE) overlaps the stack → gameOver', () => {
   const state = started();
   state.board.cells[1][4] = 1;               // every spawn shape covers (4, 1)
   state.active = { type: 'T', rotation: 0, x: 0, y: 10 };
-  const events = run(state, 1, A({ hardDrop: true }));
+  assert.deepEqual(run(state, 1, A({ hardDrop: true })), ['hardDrop', 'lock']);
+  assert.deepEqual(settle(state), ['gameOver']);
   assert.equal(state.phase, 'gameOver');
   assert.equal(state.active, null);
-  assert.deepEqual(events, ['hardDrop', 'lock', 'gameOver']);
 });
 
 test('block out covers every piece type', () => {
@@ -417,10 +463,12 @@ test('lock out away from the spawn area ends the game even though the next spawn
   assert.equal(state.board.cells[1][0], TYPE_INDEX.T, 'piece was locked before game over');
 });
 
-test('lock out via gravity as well as hard drop', () => {
+test('lock out via the lock delay as well as hard drop', () => {
   const state = started({ level: 29 });
   for (let x = 3; x <= 5; x++) state.board.cells[2][x] = 1;
   state.active = spawnPiece('T');
+  run(state, getLockDelay(29) - 1);
+  assert.equal(state.phase, 'playing');
   run(state, 1);
   assert.equal(state.phase, 'gameOver');
 });
@@ -430,14 +478,17 @@ test('no lock out when part of the piece is visible', () => {
   for (let x = 0; x <= 2; x++) state.board.cells[3][x] = 1;
   state.active = { type: 'T', rotation: 0, x: 0, y: 1 };   // rows 1–2, row 2 visible
   run(state, 1, A({ hardDrop: true }));
-  assert.equal(state.phase, 'playing');
+  assert.equal(state.phase, 'are');
   assert.equal(state.stats.pieces, 1);
+  settle(state);
+  assert.equal(state.phase, 'playing');
 });
 
 test('gameOver ignores gameplay input', () => {
   const state = started();
   state.board.cells[1][4] = 1;
   run(state, 1, A({ hardDrop: true }));
+  settle(state);
   const snapshot = state.board.cells.map((r) => [...r]);
   run(state, 20, A({ hardDrop: true, shift: -1, rotate: 1, softDrop: true }));
   assert.equal(state.phase, 'gameOver');
@@ -641,15 +692,18 @@ test('loop: input.reset on menu transitions only, not between pieces', () => {
   assert.equal(h.state.phase, 'playing');
   assert.equal(h.input.resets, 1, 'title → playing');
 
-  h.input.queue.push(A({ hardDrop: true }), A({ hardDrop: true }));
-  h.frame();
-  h.frame();
+  const lockAndSpawn = () => {
+    h.input.queue.push(A({ hardDrop: true }));
+    for (let i = 0; i <= ARE_FRAMES; i++) h.frame();         // drop + full ARE
+  };
+  lockAndSpawn();
+  lockAndSpawn();
   assert.equal(h.state.stats.pieces, 2);
-  assert.equal(h.input.resets, 1, 'locking pieces keeps DAS charge');
+  assert.equal(h.state.phase, 'playing');
+  assert.equal(h.input.resets, 1, 'playing → are → playing keeps DAS charge');
 
   h.state.board.cells[1][4] = 1;
-  h.input.queue.push(A({ hardDrop: true }));
-  h.frame();
+  lockAndSpawn();
   assert.equal(h.state.phase, 'gameOver');
   assert.equal(h.input.resets, 2, 'playing → gameOver');
 });
@@ -701,4 +755,417 @@ test('loop: game speed is identical at 60 Hz and 144 Hz', () => {
   const b = at(144);
   assert.ok(Math.abs(a.frame - b.frame) <= 1, `${a.frame} vs ${b.frame}`);
   assert.equal(a.y, b.y);
+});
+
+// ===========================================================================
+// Milestone 3
+// ===========================================================================
+
+// ---------- scoring ----------
+
+test('score: single at level 0 = 40 + hard drop 2/row', () => {
+  const state = started();
+  fillRow(state.board, 21, [3, 4, 5, 6]);
+  state.active = spawnPiece('I');            // row 1 → row 21 = 20 rows
+  run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.score, 40 + 2 * 20);
+});
+
+test('score: line clears use (level + 1) — tetris at level 9 = 12 000', () => {
+  const state = started({ level: 9 });
+  for (let y = 18; y < 22; y++) fillRow(state.board, y, [0]);
+  state.active = { type: 'I', rotation: 3, x: -1, y: 2 };   // rows 2–5 → 18–21 = 16 rows
+  run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.score, 12000 + 2 * 16);
+});
+
+test('score: double and triple values at level 5', () => {
+  for (const [rows, points] of [[2, 100 * 6], [3, 300 * 6]]) {
+    const state = started({ level: 5 });
+    for (let y = 22 - rows; y < 22; y++) fillRow(state.board, y, [0]);
+    state.active = { type: 'I', rotation: 3, x: -1, y: 10 };
+    const distance = dropDistance(state.board, state.active);
+    run(state, 1, A({ hardDrop: true }));
+    assert.equal(state.lines, rows);
+    assert.equal(state.score, points + 2 * distance, `${rows} lines`);
+  }
+});
+
+test('score: hard drop of zero rows scores nothing', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.score, 0);
+});
+
+test('score: soft drop 1/row moved; plain gravity scores nothing', () => {
+  const soft = started();
+  run(soft, 10, A({ softDrop: true }));      // 5 rows at 0.5 G
+  assert.equal(soft.score, 5);
+
+  const plain = started();
+  run(plain, 48 * 5);                         // 5 rows of normal gravity
+  assert.equal(plain.active.y, 6);
+  assert.equal(plain.score, 0);
+});
+
+test('score: soft drop on the floor earns nothing', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  run(state, 10, A({ softDrop: true }));
+  assert.equal(state.score, 0);
+});
+
+test('score: soft drop at fast levels counts every row moved', () => {
+  const state = started({ level: 29 });      // 1 G > SOFT_DROP_G
+  run(state, 10, A({ softDrop: true }));
+  assert.equal(state.score, 10);
+});
+
+test('hiScore: raised at game over, never lowered', () => {
+  const state = started();
+  state.hiScore = 50;
+  fillRow(state.board, 21, [3, 4, 5, 6]);
+  state.active = spawnPiece('I');
+  run(state, 1, A({ hardDrop: true }));      // 80 points
+  state.board.cells[1][4] = 1;
+  settle(state);
+  assert.equal(state.phase, 'gameOver');
+  assert.equal(state.hiScore, 80);
+
+  const low = started();
+  low.hiScore = 10_000;
+  low.board.cells[1][4] = 1;
+  run(low, 1, A({ hardDrop: true }));
+  settle(low);
+  assert.equal(low.hiScore, 10_000);
+});
+
+test('score resets on a new game, hiScore carries over', () => {
+  const state = started();
+  run(state, 1, A({ hardDrop: true }));
+  state.board.cells[1][4] = 1;
+  settle(state);
+  const top = state.hiScore;
+  assert.ok(top > 0);
+  update(state, A({ start: true }), []);
+  update(state, A({ start: true }), []);
+  assert.equal(state.score, 0);
+  assert.equal(state.hiScore, top);
+});
+
+// ---------- hold ----------
+
+test('hold (empty): parks the piece, deals the next one from the queue', () => {
+  const state = started({ seed: 3 });
+  const current = state.active.type;
+  const [q0, q1, q2] = state.queue;
+  const events = run(state, 1, A({ hold: true }));
+  assert.deepEqual(events, ['hold']);
+  assert.equal(state.hold.type, current);
+  assert.equal(state.hold.used, true);
+  assert.equal(state.active.type, q0);
+  assert.deepEqual(state.queue.slice(0, 2), [q1, q2]);
+  assert.equal(state.queue.length, NEXT_COUNT);
+});
+
+test('hold: only once per piece', () => {
+  const state = started({ seed: 3 });
+  run(state, 1, A({ hold: true }));
+  const snapshot = JSON.stringify({ type: state.active.type, hold: state.hold, queue: state.queue });
+  const events = run(state, 5, A({ hold: true }));
+  assert.ok(!events.includes('hold'));
+  assert.equal(JSON.stringify({ type: state.active.type, hold: state.hold, queue: state.queue }), snapshot);
+});
+
+test('hold: unlocked again after the next piece locks; swaps without touching the queue', () => {
+  const state = started({ seed: 3 });
+  const first = state.active.type;
+  run(state, 1, A({ hold: true }));
+  run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.hold.used, false);
+  settle(state);
+  const current = state.active.type;
+  const queue = [...state.queue];
+  assert.deepEqual(run(state, 1, A({ hold: true })), ['hold']);
+  assert.equal(state.active.type, first, 'held piece comes back');
+  assert.equal(state.hold.type, current);
+  assert.deepEqual(state.queue, queue);
+});
+
+test('hold: swapped-in piece respawns at spawn position, rotation 0, fresh timers', () => {
+  const state = started({ seed: 3 });
+  run(state, 1, A({ hold: true }));
+  run(state, 1, A({ hardDrop: true }));
+  settle(state);
+  state.active.rotation = 2;
+  state.active.x = 0;
+  state.active.y = 20;
+  state.lock.timer = 25;
+  state.lock.resets = 9;
+  state.gravityAcc = 0.9;
+  run(state, 1, A({ hold: true }));
+  assert.deepEqual([state.active.rotation, state.active.x, state.active.y], [0, 3, 1]);
+  assert.equal(state.lock.timer, 0);
+  assert.equal(state.lock.resets, 0);
+  assert.ok(state.gravityAcc < 0.1, 'gravity accumulator restarted');
+});
+
+test('hold: the swapped-in piece receives the rest of the frame input', () => {
+  const state = started({ seed: 3 });
+  const next = state.queue[0];
+  run(state, 1, A({ hold: true, rotate: 1 }));
+  assert.equal(state.active.type, next);
+  assert.equal(state.active.rotation, 1);
+});
+
+test('hold: swapped-in piece that cannot spawn → gameOver', () => {
+  const state = started({ seed: 3 });
+  state.active = { type: 'T', rotation: 0, x: 0, y: 10 };
+  state.board.cells[1][4] = 1;
+  const events = run(state, 1, A({ hold: true }));
+  assert.deepEqual(events, ['hold', 'gameOver']);
+  assert.equal(state.phase, 'gameOver');
+});
+
+test('hold is ignored during ARE', () => {
+  const state = started({ seed: 3 });
+  run(state, 1, A({ hardDrop: true }));
+  run(state, ARE_FRAMES - 1, A({ hold: true }));
+  assert.equal(state.hold.type, null);
+});
+
+// ---------- next queue ----------
+
+test('next queue: always NEXT_COUNT long; each spawn is the previous queue head', () => {
+  const state = started({ seed: 21 });
+  for (let i = 0; i < 60; i++) {
+    const before = [...state.queue];
+    run(state, 1, A({ hardDrop: true }));
+    settle(state);
+    assert.equal(state.active.type, before[0], `piece ${i}`);
+    assert.deepEqual(state.queue.slice(0, NEXT_COUNT - 1), before.slice(1), `piece ${i}`);
+    assert.equal(state.queue.length, NEXT_COUNT);
+    state.board = createInitialState().board;  // keep the well empty so play continues
+  }
+});
+
+test('next queue: dealt pieces follow the 7-bag', () => {
+  const state = started({ seed: 8 });
+  const dealt = [state.active.type];
+  while (dealt.length < 49) {
+    run(state, 1, A({ hardDrop: true }));
+    settle(state);
+    dealt.push(state.active.type);
+    state.board = createInitialState().board;
+  }
+  for (let i = 0; i < 49; i += 7) {
+    assert.deepEqual([...dealt.slice(i, i + 7)].sort(), [...PIECE_TYPES].sort(), `bag ${i / 7}`);
+  }
+});
+
+// ---------- lock delay ----------
+
+test('lock delay: a grounded piece locks after exactly getLockDelay frames', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  run(state, getLockDelay(0) - 1);
+  assert.equal(state.stats.pieces, 0);
+  assert.equal(state.lock.timer, getLockDelay(0) - 1);
+  assert.deepEqual(run(state, 1), ['lock']);
+  assert.equal(state.phase, 'are');
+});
+
+test('lock delay scales with level (level 64 → 21 frames)', () => {
+  const state = started({ level: 64 });
+  assert.ok(dropDistanceOf(state) > 0);
+  while (dropDistanceOf(state) > 0) run(state, 1);   // 10.5 G: lands on frame 2
+  let frames = 1;                             // the landing frame counts as timer 1
+  while (state.stats.pieces === 0) { run(state, 1); frames++; }
+  assert.equal(frames, getLockDelay(64));
+});
+
+test('lock delay: moving on the floor resets the timer', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  run(state, 20);
+  assert.equal(state.lock.timer, 20);
+  run(state, 1, A({ shift: 1 }));
+  assert.equal(state.lock.timer, 1, 'reset, then counted this frame');
+  assert.equal(state.lock.resets, 1);
+  run(state, getLockDelay(0) - 2);
+  assert.equal(state.stats.pieces, 0);
+  run(state, 1);
+  assert.equal(state.stats.pieces, 1);
+});
+
+test('lock delay: rotating on the floor resets the timer', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  run(state, 20);
+  run(state, 1, A({ rotate: 1 }));            // floor kick
+  assert.equal(state.lock.resets, 1);
+  assert.ok(state.lock.timer <= 1);
+});
+
+test('lock delay: a failed move does not reset the timer', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 0, y: 20 };
+  run(state, 20);
+  run(state, 1, A({ shift: -1 }));            // into the wall
+  assert.equal(state.lock.timer, 21);
+  assert.equal(state.lock.resets, 0);
+});
+
+test('lock delay: at most MAX_LOCK_RESETS resets — endless sliding still locks', () => {
+  assert.equal(MAX_LOCK_RESETS, 15);
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  let frame = 0;
+  while (state.stats.pieces === 0) {
+    run(state, 1, A({ shift: frame % 2 ? -1 : 1 }));
+    frame++;
+    assert.ok(frame < 200, 'piece stalled forever');
+  }
+  // Frame 1 only starts the timer; frames 2–16 spend the 15 resets; after
+  // that the timer runs uninterrupted from 1 on frame 16 to 30 on frame 45.
+  assert.equal(state.lock.resets, 15);
+  assert.equal(frame, 1 + MAX_LOCK_RESETS + getLockDelay(0) - 1);
+});
+
+test('lock delay: sliding off a ledge stops the timer', () => {
+  const state = started();
+  state.board.cells[21][1] = 1;               // single-block ledge
+  state.active = { type: 'T', rotation: 0, x: 0, y: 19 };  // resting on it
+  run(state, 20);
+  assert.equal(state.lock.timer, 20);
+  run(state, 1, A({ shift: 1 }));             // cols 1–3: still supported
+  run(state, 1, A({ shift: 1 }));             // cols 2–4: airborne
+  assert.equal(state.lock.timer, 0);
+  assert.equal(state.stats.pieces, 0);
+});
+
+test('lock delay: going airborne stops the timer even with no resets left', () => {
+  const state = started();
+  state.board.cells[21][1] = 1;
+  state.active = { type: 'T', rotation: 0, x: 0, y: 19 };
+  state.lock.lowestY = 19;
+  run(state, 1);
+  for (let i = 0; i < 15; i++) run(state, 1, A({ shift: i % 2 ? -1 : 1 }));  // spend all 15 resets
+  run(state, 5);
+  assert.equal(state.lock.resets, 15);
+  assert.ok(state.lock.timer > 1);
+  run(state, 1, A({ shift: 1 }));             // off the ledge — no reset available
+  assert.equal(state.lock.timer, 0);
+});
+
+test('lock delay: reaching a new lowest row restores the reset budget', () => {
+  const state = started();
+  state.board.cells[21][1] = 1;
+  state.active = { type: 'T', rotation: 0, x: 0, y: 19 };
+  state.lock.lowestY = 19;
+  run(state, 1);                              // start the timer
+  for (let i = 0; i < 15; i++) run(state, 1, A({ shift: i % 2 ? -1 : 1 }));  // x 0 ↔ 1, both supported
+  assert.equal(state.lock.resets, 15);
+  assert.equal(state.active.x, 1);
+  run(state, 1, A({ shift: 1 }));             // x = 2: off the ledge
+  run(state, 4, A({ softDrop: true }));       // falls to y = 20
+  assert.equal(state.active.y, 20);
+  assert.equal(state.lock.lowestY, 20);
+  assert.equal(state.lock.resets, 0);
+});
+
+test('lock delay: floor kicks upward do not refresh the reset budget', () => {
+  const state = started();
+  state.active = { type: 'T', rotation: 0, x: 3, y: 20 };
+  state.lock.lowestY = 20;
+  run(state, 2);
+  run(state, 1, A({ rotate: 1 }));            // kicks up to y = 19
+  assert.equal(state.active.y, 19);
+  assert.equal(state.lock.resets, 1);
+  assert.equal(state.lock.lowestY, 20);
+});
+
+test('lock delay: hard drop still locks immediately', () => {
+  const state = started();
+  assert.deepEqual(run(state, 1, A({ hardDrop: true })), ['hardDrop', 'lock']);
+});
+
+// ---------- ARE ----------
+
+test('ARE: ARE_FRAMES frames with no piece, spawn on the last one', () => {
+  assert.equal(ARE_FRAMES, 6);
+  const state = started();
+  run(state, 1, A({ hardDrop: true }));
+  for (let i = 1; i < ARE_FRAMES; i++) {
+    run(state, 1);
+    assert.equal(state.phase, 'are', `ARE frame ${i}`);
+    assert.equal(state.active, null);
+  }
+  run(state, 1);
+  assert.equal(state.phase, 'playing');
+  assert.ok(state.active);
+});
+
+test('ARE: gameplay input is ignored', () => {
+  const state = started();
+  run(state, 1, A({ hardDrop: true }));
+  const board = state.board.cells.map((r) => [...r]);
+  const score = state.score;
+  run(state, ARE_FRAMES - 1, A({ hardDrop: true, softDrop: true, shift: 1, rotate: 1, hold: true }));
+  assert.deepEqual(state.board.cells.map((r) => [...r]), board);
+  assert.equal(state.score, score);
+});
+
+test('ARE follows line clears too', () => {
+  const state = started();
+  fillRow(state.board, 21, [3, 4, 5, 6]);
+  state.active = spawnPiece('I');
+  run(state, 1, A({ hardDrop: true }));
+  assert.equal(state.lines, 1);
+  assert.equal(state.phase, 'are');
+});
+
+// ---------- ghost projection ----------
+
+test('ghost: y + board.dropDistance() is exactly where a hard drop lands (fuzzed)', () => {
+  const rnd = seeded(77);
+  let checked = 0;
+  for (let n = 0; n < 400; n++) {
+    const state = started({ seed: n + 1 });
+    // Random jagged stack with holes and overhangs, never a full row
+    for (let x = 0; x < 10; x++) {
+      const height = Math.floor(rnd() * 14);
+      for (let y = 21; y > 21 - height; y--) if (rnd() > 0.2) state.board.cells[y][x] = 1;
+    }
+    for (let y = 0; y < 22; y++) state.board.cells[y][Math.floor(rnd() * 10)] = 0;
+    const type = PIECE_TYPES[Math.floor(rnd() * 7)];
+    const piece = { type, rotation: Math.floor(rnd() * 4), x: Math.floor(rnd() * 10) - 2, y: Math.floor(rnd() * 4) };
+    if (getAbsoluteCells(piece).some(([x, y]) => x < 0 || x > 9 || y > 21 || state.board.cells[y][x])) continue;
+
+    // What the renderer will do: project with dropDistance, without touching the piece
+    const originalY = piece.y;
+    const ghostY = piece.y + dropDistance(state.board, piece);
+    assert.equal(piece.y, originalY, 'dropDistance must not mutate');
+    const ghostCells = getAbsoluteCells({ ...piece, y: ghostY });
+
+    state.active = { ...piece };
+    const before = filledCount(state.board);
+    run(state, 1, A({ hardDrop: true }));
+    if (state.lines > 0) continue;            // piece completed a row; the stack shifted
+    for (const [x, y] of ghostCells) assert.equal(state.board.cells[y][x], TYPE_INDEX[type], `case ${n}`);
+    assert.equal(filledCount(state.board), before + 4, `case ${n}`);
+    checked++;
+  }
+  assert.ok(checked > 150, `only ${checked} valid cases`);
+});
+
+test('ghost: dropDistance leaves the piece untouched and matches brute force', () => {
+  const state = started();
+  state.board.cells[15][4] = 1;               // overhang over a cave
+  const piece = Object.freeze({ type: 'T', rotation: 0, x: 3, y: 2 });
+  const d = dropDistance(state.board, piece);  // throws in strict mode if it mutated a frozen object
+  state.active = { ...piece };
+  assert.equal(d, dropDistanceOf(state));
+  assert.equal(piece.y + d, 13, 'stops on the overhang, not in the cave below');
 });
