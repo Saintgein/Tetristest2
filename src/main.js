@@ -79,6 +79,7 @@ const game = createGame({
     overlayInfo: $('overlay-info'),
     well: $('well'),
     sound: $('hud-sound'),
+    music: $('hud-music'),
   }, { reducedMotion }),
   audio,
   storage,
@@ -86,6 +87,14 @@ const game = createGame({
 });
 
 game.start();
+
+// Footer toggles (same as M / B). pointerdown is cancelled so the buttons never take
+// focus: Space and Enter must keep driving the game, not re-click a focused button.
+for (const [id, toggle] of [['hud-sound', () => game.toggleMute()], ['hud-music', () => game.toggleMusic()]]) {
+  const button = $(id);
+  button.addEventListener('pointerdown', (e) => e.preventDefault());
+  button.addEventListener('click', toggle);
+}
 
 // QA aid: ?debug exposes the game and audio for scripted browser tests.
 if (params.has('debug')) Object.assign(window, { __game: game, __audio: audio });

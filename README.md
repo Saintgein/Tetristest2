@@ -19,10 +19,15 @@ with the Web Audio API.
 - **2A03-style sound:** pulse ×2 (four duty cycles), a stepped triangle and LFSR
   noise channels. There are 13 effects, including a tetris fanfare and a
   game-over jingle.
+- **Chiptune music:** a looping 3-voice arrangement of *Korobeiniki* (lead,
+  harmony and walking bass) at 140 BPM. It's scheduled a measure ahead on the
+  audio clock, with no drift and a seamless loop. It pauses and resumes on the
+  exact beat and steps aside while a sound effect uses its channel. B toggles
+  it; M mutes everything.
 - **Accessibility:** honours `prefers-reduced-motion`. No blinking, no flashes,
   and cleared rows are cut instantly, with identical game timing.
-- **Persistence:** top score, mute setting and last start level are saved in
-  `localStorage`.
+- **Persistence:** top score, mute and music settings, and last start level are
+  saved in `localStorage`.
 
 ## Running it
 
@@ -48,7 +53,8 @@ to a monospace font.
 | Rotate counter-clockwise | Z |
 | Hold | C or Shift |
 | Pause / resume | P or Esc (also pauses automatically when the tab loses focus) |
-| Sound on / off | M |
+| All sound on / off | M (or click SOUND in the footer) |
+| Music on / off | B (or click MUSIC in the footer) |
 | Start / continue | Enter |
 | Choose start level (title screen) | ← → (0–19) |
 
@@ -61,7 +67,7 @@ page gets a user gesture.
 npm test        # node --test; no dependencies. Node.js 20+ (developed on 22)
 ```
 
-About 280 tests cover the pure game logic, and the browser-facing modules are
+About 320 tests cover the pure game logic, and the browser-facing modules are
 tested against small fakes:
 
 | Suite | What it covers |
@@ -72,8 +78,9 @@ tested against small fakes:
 | `game` | every rule frame by frame: gravity, lock delay, hold, ARE, line-clear phase, pause, game over, persistence, the fixed-timestep loop |
 | `renderer` | real pixel colours on a fake canvas (`tests/helpers/fake-canvas.js`): bevels, ghost, previews, clear animation |
 | `ui` | HUD formatting, overlay screens, level-up flash |
-| `audio` | Fourier series of the duty/triangle waves, LFSR periods, and scheduling on a fake `AudioContext` |
-| `perf` | no allocations in steady-state frames of the real game loop (see below) |
+| `audio` | Fourier series of the duty/triangle waves, LFSR periods, effect scheduling, and the music sequencer (timing across loops, pause/resume on the beat, ducking) on a fake `AudioContext` |
+| `perf` | no allocations in steady-state frames of the real game loop, music included (see below) |
+| `music-perf` | the sequencer allocates nothing per frame or per note, and its heap stays flat over 100 loops |
 
 ### QA URL flags
 
@@ -97,7 +104,7 @@ src/
   input.js        keyboard → per-frame actions with DAS/ARR
   renderer.js     canvas drawing from cached block sprites
   ui.js           DOM HUD and overlay screens
-  audio.js        2A03-style synthesis
+  audio.js        2A03-style effects + background-music sequencer
 ```
 
 - **One state object, one `update()`.** `game.js` owns all game data.
@@ -127,6 +134,8 @@ haven't been tested yet.
 ## Credits
 
 Tetris® is a trademark of The Tetris Company. This is an unaffiliated fan and
-educational project and contains no original game assets. The font is
+educational project and contains no original game assets. The music is the
+Russian folk song *Korobeiniki* (19th century, public domain) in an original
+3-voice arrangement. The font is
 [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) by CodeMan38
 (SIL Open Font License).

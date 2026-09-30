@@ -278,3 +278,11 @@ test('poll() reuses one Actions object (no per-frame allocation)', () => {
   assert.equal(second.hardDrop, true, 'overwritten with this frame');
   assert.equal(input.poll().hardDrop, false);
 });
+
+test('B is the music toggle: a press edge, separate from M', () => {
+  const { input, down } = setup();
+  down('KeyB');
+  const a = input.poll();
+  assert.deepEqual([a.music, a.mute], [true, false]);
+  assert.equal(input.poll().music, false, 'edge only');
+});

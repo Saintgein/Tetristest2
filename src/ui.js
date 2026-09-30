@@ -47,7 +47,7 @@ export const isLevelUpFlashOn = (state) => state.levelUpFlash > 0 && Math.floor(
  * menu phases.
  */
 export function createUI(
-  { score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well, sound },
+  { score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well, sound, music },
   { reducedMotion = () => false } = {},
 ) {
   const shownNumbers = new Map();              // element → last number shown
@@ -66,6 +66,14 @@ export function createUI(
     if (!el || shownText.get(el) === text) return;
     el.textContent = text;
     shownText.set(el, text);
+  }
+
+  /** On/off toggle button: label text plus aria-pressed for assistive tech. */
+  function setToggle(el, label, on) {
+    const text = on ? `${label}: ON` : `${label}: OFF`;
+    if (!el || shownText.get(el) === text) return;
+    setText(el, text);
+    el.setAttribute?.('aria-pressed', on ? 'true' : 'false');
   }
 
   return {
@@ -92,9 +100,14 @@ export function createUI(
       if (well && flash !== wellFlash) { well.classList.toggle('well--flash', flash); wellFlash = flash; }
     },
 
-    /** Footer sound indicator ("SOUND ON" / "SOUND OFF"). */
+    /** Footer SOUND toggle button ("SOUND: ON" / "SOUND: OFF"). */
     setMuted(muted) {
-      setText(sound, muted ? 'SOUND OFF' : 'SOUND ON');
+      setToggle(sound, 'SOUND', !muted);
+    },
+
+    /** Footer MUSIC toggle button ("MUSIC: ON" / "MUSIC: OFF"). */
+    setMusic(on) {
+      setToggle(music, 'MUSIC', on);
     },
   };
 }

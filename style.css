@@ -232,6 +232,31 @@ h1, h2, p, dl, dd, ul {
   color: var(--text);
 }
 
+/* SOUND / MUSIC toggles: look like the rest of the footer, but clickable */
+.hud-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  line-height: inherit;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.hud-toggle:hover,
+.hud-toggle:focus-visible {
+  color: var(--yellow);
+}
+
+.hud-toggle:focus-visible {
+  outline: var(--px) solid var(--yellow);
+  outline-offset: var(--px);
+}
+
+.hud-toggle[aria-pressed='false'] {
+  color: var(--magenta);
+}
+
 /* ---------- CRT overlay: scanlines + vignette ---------- */
 
 .crt {

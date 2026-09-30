@@ -150,6 +150,110 @@ export const RECIPES = {
 
 export const SFX_NAMES = Object.keys(RECIPES);
 
+/** Per effect: when (s after start) it releases each channel — used to duck the music. */
+const RECIPE_CHANNEL_END = Object.fromEntries(SFX_NAMES.map((name) => {
+  const ends = {};
+  for (const n of RECIPES[name]) ends[n.ch] = Math.max(ends[n.ch] ?? 0, n.at + n.dur);
+  return [name, ends];
+}));
+
+// ---------------------------------------------------------------------------
+// Background music: "Korobeiniki" (Russian folk song, public domain),
+// arranged for 3 voices. A section twice, then B. A minor, 140 BPM, 4/4.
+// Notation: NOTE:beats, R = rest, | = bar line (checked: every bar is 4 beats).
+// ---------------------------------------------------------------------------
+
+const LEAD_A = [
+  'E5:1 B4:.5 C5:.5 D5:1 C5:.5 B4:.5', 'A4:1 A4:.5 C5:.5 E5:1 D5:.5 C5:.5',
+  'B4:1.5 C5:.5 D5:1 E5:1', 'C5:1 A4:1 A4:2',
+  'D5:1.5 F5:.5 A5:1 G5:.5 F5:.5', 'E5:1.5 C5:.5 E5:1 D5:.5 C5:.5',
+  'B4:1 B4:.5 C5:.5 D5:1 E5:1', 'C5:1 A4:1 A4:1 R:1',
+];
+const LEAD_B = [
+  'E5:2 C5:2', 'D5:2 B4:2', 'C5:2 A4:2', 'G#4:2 B4:1 R:1',
+  'E5:2 C5:2', 'D5:2 B4:2', 'C5:1 E5:1 A5:2', 'G#5:4',
+];
+const HARMONY_A = [
+  'G#4:2 E4:2', 'A4:2 E4:2', 'G#4:2 B4:2', 'A4:2 E4:2',
+  'F4:2 A4:2', 'E4:2 G4:2', 'G#4:2 E4:2', 'E4:2 R:2',
+];
+const HARMONY_B = [
+  'A4:2 E4:2', 'G#4:2 E4:2', 'A4:2 E4:2', 'E4:2 G#4:1 R:1',
+  'A4:2 E4:2', 'G#4:2 E4:2', 'A4:2 C5:2', 'B4:4',
+];
+// Walking bass, one chord-tone/passing-tone quarter per beat: E Am E Am Dm C E Am | Am E …
+const BASS_A = [
+  'E2:1 G#2:1 B2:1 G#2:1', 'A2:1 C3:1 E3:1 C3:1', 'E2:1 G#2:1 B2:1 D3:1', 'A2:1 E2:1 A2:1 C3:1',
+  'D3:1 A2:1 F2:1 A2:1', 'C3:1 G2:1 C3:1 D3:1', 'E3:1 B2:1 G#2:1 E2:1', 'A2:1 C3:1 B2:1 G#2:1',
+];
+const BASS_B = [
+  'A2:1 C3:1 E3:1 C3:1', 'E2:1 G#2:1 B2:1 G#2:1', 'A2:1 C3:1 E3:1 C3:1', 'E2:1 G#2:1 B2:1 E3:1',
+  'A2:1 C3:1 E3:1 A3:1', 'G#3:1 E3:1 B2:1 G#2:1', 'A2:1 C3:1 E3:1 C3:1', 'E2:1 B2:1 E3:1 G#2:1',
+];
+
+const NOTE_INDEX = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+/** "G#4" → MIDI 68. */
+export function parseNote(name) {
+  const m = /^([A-G])(#|b)?(-?\d)$/.exec(name);
+  if (!m) throw new Error(`bad note ${name}`);
+  return 12 * (Number(m[3]) + 1) + NOTE_INDEX[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+}
+
+/**
+ * Compiles bars of "NOTE:beats" into typed arrays (done once at load, so the
+ * sequencer never parses or allocates while playing).
+ * @returns {{ starts: Float64Array, durs: Float64Array, freqs: Float64Array, midi: Int8Array, beats: number }}
+ */
+export function compileVoice(bars) {
+  const notes = [];
+  let beat = 0;
+  bars.forEach((bar, b) => {
+    let barBeats = 0;
+    for (const token of bar.trim().split(/\s+/)) {
+      const [name, len] = token.split(':');
+      const dur = Number(len);
+      notes.push({ beat, dur, midi: name === 'R' ? -1 : parseNote(name) });
+      beat += dur;
+      barBeats += dur;
+    }
+    if (barBeats !== 4) throw new Error(`bar ${b + 1} has ${barBeats} beats`);
+  });
+  const n = notes.length;
+  const voice = { starts: new Float64Array(n), durs: new Float64Array(n), freqs: new Float64Array(n), midi: new Int8Array(n), beats: beat };
+  notes.forEach((note, i) => {
+    voice.starts[i] = note.beat;
+    voice.durs[i] = note.dur;
+    voice.midi[i] = note.midi;
+    voice.freqs[i] = note.midi < 0 ? 0 : noteFreq(note.midi);
+  });
+  return voice;
+}
+
+const song = (a, b) => [...a, ...a, ...b];
+
+/** The looping background track. `gate` shortens notes for articulation. */
+export const BGM = {
+  title: 'Korobeiniki (trad.)',
+  tempo: 140,
+  voices: [
+    { name: 'lead', channel: 'pulse1', duty: 0.25, vol: 0.55, gate: 0.9, ...compileVoice(song(LEAD_A, LEAD_B)) },
+    { name: 'harmony', channel: 'pulse2', duty: 0.5, vol: 0.3, gate: 0.95, ...compileVoice(song(HARMONY_A, HARMONY_B)) },
+    { name: 'bass', channel: 'triangle', duty: null, vol: 0.85, gate: 0.8, ...compileVoice(song(BASS_A, BASS_B)) },
+  ],
+};
+BGM.lengthBeats = BGM.voices[0].beats;         // 24 bars × 4 = 96 beats (~41 s)
+
+const SECONDS_PER_BEAT = 60 / BGM.tempo;
+/** How far ahead notes are scheduled: one measure, so a stall never starves the loop. */
+export const MUSIC_LOOKAHEAD_S = 4 * SECONDS_PER_BEAT;
+const MUSIC_LEVEL = 0.55;                      // music sits under the effects
+const MUSIC_START_DELAY_S = 0.05;
+const NOTE_ATTACK_S = 0.004;
+const NOTE_RELEASE_S = 0.02;
+const DUCK_LEVEL = 0;                          // an effect takes its channel over completely
+const MAX_NOTES_PER_TICK = 256;                // per voice; far above one lookahead measure
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
@@ -164,14 +268,29 @@ export function createAudio({
   AudioContext: Ctor = globalThis.AudioContext ?? globalThis.webkitAudioContext,
   volume = DEFAULT_VOLUME,
   muted = false,
+  musicEnabled = true,
 } = {}) {
   let ctx = null;
   let master = null;
+  let musicGain = null;
   const channelGain = {};
   const playing = {};                         // channel → scheduled sources (for cutting)
   const waves = {};                           // cached PeriodicWaves
   const noise = {};                           // cached LFSR buffers
   let level = clamp01(volume);
+
+  // Sequencer state. Everything is preallocated; tick() only reads and writes
+  // numbers, so it can run every frame without allocating.
+  const music = {
+    enabled: Boolean(musicEnabled),         // player preference (B key)
+    wanted: false,                          // the game is in play (not title / paused / game over)
+    active: false,                          // notes are being scheduled right now
+    anchorTime: 0,                          // ctx time of anchorBeat
+    anchorBeat: 0,                          // absolute beat (loops included) where playback (re)started
+    resumeBeat: 0,                          // where to continue after a pause
+    voices: [],                             // { data, osc, env, duck, i, loopBase, fromBeat }
+  };
+  const voiceByChannel = {};
 
   function build() {
     ctx = new Ctor();
@@ -184,6 +303,126 @@ export function createAudio({
       channelGain[ch].connect(master);
       playing[ch] = [];
     }
+    buildMusic();
+  }
+
+  /** One persistent oscillator per voice: notes are just frequency/gain automation on it. */
+  function buildMusic() {
+    musicGain = ctx.createGain();
+    musicGain.gain.value = MUSIC_LEVEL;
+    musicGain.connect(master);
+    music.voices = BGM.voices.map((data) => {
+      const osc = ctx.createOscillator();
+      osc.setPeriodicWave(data.channel === 'triangle'
+        ? wave('triangle', TRIANGLE_STEPS)
+        : wave(`duty${data.duty}`, DUTY_STEPS[data.duty]));
+      const env = ctx.createGain();           // note envelopes
+      env.gain.value = 0;
+      const duckGain = ctx.createGain();      // effects on this channel take precedence
+      duckGain.gain.value = 1;
+      const mix = ctx.createGain();
+      mix.gain.value = CHANNEL_LEVEL[data.channel] * data.vol;
+      osc.connect(env);
+      env.connect(duckGain);
+      duckGain.connect(mix);
+      mix.connect(musicGain);
+      osc.start(ctx.currentTime);
+      const voice = { data, osc, env, duck: duckGain, i: 0, loopBase: 0, fromBeat: 0 };
+      voiceByChannel[data.channel] = voice;
+      return voice;
+    });
+  }
+
+  const timeAt = (beat) => music.anchorTime + (beat - music.anchorBeat) * SECONDS_PER_BEAT;
+  const beatAt = (time) => music.anchorBeat + (time - music.anchorTime) / SECONDS_PER_BEAT;
+
+  /**
+   * Starts scheduling from music.resumeBeat (0 = top; a mid-note position resumes that note).
+   * Reads the beat from state rather than taking it as a parameter: a fractional
+   * argument would be boxed into a HeapNumber on every resume (measured).
+   */
+  function startMusic() {
+    const fromBeat = music.resumeBeat;
+    music.anchorTime = ctx.currentTime + MUSIC_START_DELAY_S;
+    music.anchorBeat = fromBeat;
+    const length = BGM.lengthBeats;
+    const loopBase = Math.floor(fromBeat / length) * length;
+    const inLoop = fromBeat - loopBase;
+    for (let k = 0; k < music.voices.length; k++) {
+      const v = music.voices[k];
+      const { starts, durs } = v.data;
+      let i = 0;
+      while (i < starts.length && starts[i] + durs[i] <= inLoop) i++;
+      v.i = i === starts.length ? 0 : i;
+      v.loopBase = i === starts.length ? loopBase + length : loopBase;
+      v.fromBeat = fromBeat;
+    }
+    music.active = true;
+    tickMusic();
+  }
+
+  function scheduleNote(v, freq, t0, t1) {
+    if (t1 - t0 < 2 * NOTE_ATTACK_S) return;   // sliver left over after a pause: skip
+    const g = v.env.gain;
+    v.osc.frequency.setValueAtTime(freq, t0);
+    g.setValueAtTime(0, t0);
+    g.linearRampToValueAtTime(1, t0 + NOTE_ATTACK_S);
+    g.setValueAtTime(1, Math.max(t0 + NOTE_ATTACK_S, t1 - NOTE_RELEASE_S));
+    g.linearRampToValueAtTime(0, t1);
+  }
+
+  /** Schedules every note that starts before now + lookahead. Allocation-free. */
+  function tickMusic() {
+    const horizon = ctx.currentTime + MUSIC_LOOKAHEAD_S;
+    const length = BGM.lengthBeats;
+    for (let k = 0; k < music.voices.length; k++) {
+      const v = music.voices[k];
+      const d = v.data;
+      // A measure holds at most 32 notes; the cap only guards against a data or
+      // timing bug turning this into an infinite loop that would freeze the game.
+      for (let guard = 0; guard < MAX_NOTES_PER_TICK; guard++) {
+        const noteStart = v.loopBase + d.starts[v.i];
+        const from = noteStart > v.fromBeat ? noteStart : v.fromBeat;   // resumed mid-note
+        const t0 = timeAt(from);
+        if (t0 >= horizon) break;
+        const gateEnd = noteStart + d.durs[v.i] * d.gate;
+        if (d.freqs[v.i] > 0 && gateEnd > from) scheduleNote(v, d.freqs[v.i], t0, timeAt(gateEnd));
+        v.i++;
+        if (v.i === d.starts.length) {      // seamless loop: the next pass continues the same timeline
+          v.i = 0;
+          v.loopBase += length;
+        }
+      }
+    }
+  }
+
+  function pauseMusic() {
+    const now = ctx.currentTime;
+    music.resumeBeat = Math.max(music.anchorBeat, beatAt(now));
+    for (let k = 0; k < music.voices.length; k++) {
+      const v = music.voices[k];
+      v.env.gain.cancelScheduledValues(now);
+      v.env.gain.setTargetAtTime(0, now, 0.005);   // fade from wherever it is: no click
+      v.osc.frequency.cancelScheduledValues(now);
+    }
+    music.active = false;
+  }
+
+  /** Plays iff the context exists, the player wants music and the game is in play. */
+  function reconcileMusic() {
+    const should = ctx !== null && music.enabled && music.wanted;
+    if (should && !music.active) startMusic();
+    else if (!should && music.active) pauseMusic();
+  }
+
+  /** An effect takes over its channel: silence that music voice until the effect ends. */
+  function duck(ch, t0, t1) {
+    const v = voiceByChannel[ch];
+    if (!v) return;
+    const g = v.duck.gain;
+    g.cancelScheduledValues(t0);
+    g.setValueAtTime(DUCK_LEVEL, t0);
+    g.setValueAtTime(1, t1);
   }
 
   function wave(key, steps) {
@@ -260,6 +499,7 @@ export function createAudio({
       try {
         if (!ctx) build();
         if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        reconcileMusic();
       } catch {
         ctx = null;                          // blocked or unsupported: stay silent
       }
@@ -271,7 +511,11 @@ export function createAudio({
       try {
         const t0 = ctx.currentTime;
         const used = new Set(recipe.map((n) => n.ch));
-        for (const ch of used) cut(ch, t0);
+        const ends = RECIPE_CHANNEL_END[name];
+        for (const ch of used) {
+          cut(ch, t0);
+          duck(ch, t0, t0 + ends[ch]);             // the music voice on this channel steps aside
+        }
         for (const n of recipe) schedule(n, t0);
       } catch { /* never let a sound break the game */ }
     },
@@ -291,8 +535,46 @@ export function createAudio({
       setMasterGain();
     },
 
+    // ---- background music ----
+
+    /** Player preference (B key). Survives pauses; the game decides when music may play. */
+    setMusicEnabled(value) {
+      music.enabled = Boolean(value);
+      if (ctx) reconcileMusic();
+    },
+
+    toggleMusic() {
+      this.setMusicEnabled(!music.enabled);
+      return music.enabled;
+    },
+
+    /** Game-driven: true while a game is in play, false on title / pause / game over. Idempotent. */
+    setMusicActive(value) {
+      music.wanted = value === true;
+      if (ctx) reconcileMusic();
+    },
+
+    /** Back to bar 1 (new game). */
+    restartMusic() {
+      if (ctx && music.active) pauseMusic();
+      music.resumeBeat = 0;
+      if (ctx) reconcileMusic();
+    },
+
+    /** Call once per rendered frame: keeps one measure of notes scheduled ahead. */
+    tick() {
+      if (music.active) tickMusic();
+    },
+
     get muted() { return muted; },
     get ready() { return ctx !== null; },
+    get musicEnabled() { return music.enabled; },
+    get musicPlaying() { return music.active; },
+    /** Current song position in beats (tests / debugging). */
+    get musicBeat() {
+      if (!ctx || !music.active) return music.resumeBeat;
+      return Math.max(music.anchorBeat, beatAt(ctx.currentTime));
+    },
   };
 }
 

@@ -7,7 +7,7 @@
 
 import {
   NEXT_COUNT, SOFT_DROP_G, STEP_MS, MAX_FRAME_MS, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES,
-  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY, MUTE_KEY, START_LEVEL_KEY,
+  MAX_START_LEVEL, LEVEL_UP_FLASH_FRAMES, GAME_OVER_DELAY_FRAMES, HI_SCORE_KEY, MUTE_KEY, START_LEVEL_KEY, BGM_KEY,
 } from './config.js';
 import {
   createBoard, isValidPosition, lockPiece, findFullRows, clearRows, isLockOut, dropDistance,
@@ -425,6 +425,11 @@ export function loadMuted(storage) {
   return loadInt(storage, MUTE_KEY) === 1;
 }
 
+/** @returns {boolean} stored music preference; on unless explicitly turned off */
+export function loadBgmEnabled(storage) {
+  return loadInt(storage, BGM_KEY) !== 0;
+}
+
 function defaultStorage() {
   try {
     return globalThis.localStorage ?? null;
@@ -468,7 +473,8 @@ function touchesMenu(from, to) {
 }
 
 /**
- * @returns {{ start(): void, stop(): void, pause(): boolean, getState(): object }}
+ * @returns {{ start(): void, stop(): void, pause(): boolean, toggleMute(): boolean,
+ *             toggleMusic(): boolean, getState(): object }}
  */
 export function createGame({
   input,
@@ -486,10 +492,22 @@ export function createGame({
   audio.setMuted?.(muted);
   ui.setMuted?.(muted);
 
+  const musicOn = loadBgmEnabled(storage);
+  audio.setMusicEnabled?.(musicOn);
+  ui.setMusic?.(musicOn);
+
   function toggleMute() {
     const now = audio.toggleMute ? audio.toggleMute() : false;
     ui.setMuted?.(now);
     saveValue(storage, MUTE_KEY, now ? 1 : 0);
+    return now;
+  }
+
+  function toggleMusic() {
+    const on = audio.toggleMusic ? audio.toggleMusic() : false;
+    ui.setMusic?.(on);
+    saveValue(storage, BGM_KEY, on ? 1 : 0);
+    return on;
   }
   const clock = createClock();
   const events = [];
@@ -502,15 +520,23 @@ export function createGame({
       const prevPhase = state.phase;
       while (events.length > 0) events.pop();     // not length = 0: that frees the backing store
       const actions = input.poll();
-      if (actions.mute) toggleMute();            // a setting, not game state: works in every phase
+      if (actions.mute) toggleMute();            // settings, not game state: work in every phase
+      if (actions.music) toggleMusic();
       update(state, actions, events);
       for (let e = 0; e < events.length; e++) audio.play(events[e]);
       if (state.phase !== prevPhase && touchesMenu(prevPhase, state.phase)) input.reset();
       if (state.phase === 'gameOver' && prevPhase !== 'gameOver' && state.newHiScore) {
         saveHiScore(storage, state.hiScore);
       }
-      if (prevPhase === 'title' && state.phase === 'playing') saveValue(storage, START_LEVEL_KEY, state.startLevel);
+      if (prevPhase === 'title' && state.phase === 'playing') {
+        saveValue(storage, START_LEVEL_KEY, state.startLevel);
+        audio.restartMusic?.();                   // every new game starts at bar 1
+      }
     }
+    // Music plays only while a game is in play; pause / title / game over stop it
+    // (it resumes from the same beat). tick() keeps a measure scheduled ahead.
+    audio.setMusicActive?.(IN_GAME_PHASES.has(state.phase));
+    audio.tick?.();
     renderer.render(state);
     ui.update(state);
     if (running) rafId = raf(frame);
@@ -536,10 +562,14 @@ export function createGame({
     pause() {
       if (!pauseGame(state)) return false;
       audio.play('pause');
+      audio.setMusicActive?.(false);             // hidden tabs get no more frames: stop now
       input.reset();
       clock.last = null;
       return true;
     },
+    /** Same as pressing M / B (HUD buttons). @returns {boolean} the new state */
+    toggleMute,
+    toggleMusic,
     getState: () => state,
   };
 }

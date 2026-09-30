@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createInitialState, update, createClock, advanceClock, createGame, pauseGame, loadHiScore, saveHiScore,
-  loadStartLevel, loadMuted,
+  loadStartLevel, loadMuted, loadBgmEnabled,
 } from '../src/game.js';
 import { emptyActions } from '../src/input.js';
 import { spawnPiece, getAbsoluteCells, TYPE_INDEX, PIECE_TYPES } from '../src/pieces.js';
 import { dropDistance } from '../src/board.js';
 import {
   STEP_MS, NEXT_COUNT, ARE_FRAMES, MAX_LOCK_RESETS, LINE_CLEAR_FRAMES, GAME_OVER_DELAY_FRAMES,
-  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL, MUTE_KEY, START_LEVEL_KEY,
+  LEVEL_UP_FLASH_FRAMES, HI_SCORE_KEY, MAX_START_LEVEL, MUTE_KEY, START_LEVEL_KEY, BGM_KEY,
 } from '../src/config.js';
 import { getLockDelay, getGravity } from '../src/progression.js';
 
@@ -661,12 +661,20 @@ function loopHarness({ level = 0, storage = null } = {}) {
     reset() { this.resets++; },
   };
   const renderer = { calls: 0, render() { this.calls++; } };
-  const ui = { calls: 0, mutedShown: [], update() { this.calls++; }, setMuted(m) { this.mutedShown.push(m); } };
+  const ui = {
+    calls: 0, mutedShown: [], musicShown: [],
+    update() { this.calls++; }, setMuted(m) { this.mutedShown.push(m); }, setMusic(on) { this.musicShown.push(on); },
+  };
   const audio = {
-    played: [], muted: false,
+    played: [], muted: false, musicOn: true, musicActive: false, restarts: 0, ticks: 0,
     play(name) { this.played.push(name); },
     setMuted(m) { this.muted = m; },
     toggleMute() { this.muted = !this.muted; return this.muted; },
+    setMusicEnabled(on) { this.musicOn = on; },
+    toggleMusic() { this.musicOn = !this.musicOn; return this.musicOn; },
+    setMusicActive(on) { this.musicActive = on; },
+    restartMusic() { this.restarts++; },
+    tick() { this.ticks++; },
   };
   const game = createGame({
     input, renderer, ui, audio,
@@ -1844,4 +1852,135 @@ test('loadStartLevel / loadMuted: validate stored values', () => {
   assert.equal(loadMuted(fakeStorage({ [MUTE_KEY]: '1' })), true);
   for (const other of ['0', 'true', '', '2']) assert.equal(loadMuted(fakeStorage({ [MUTE_KEY]: other })), false, other);
   assert.equal(loadMuted({ getItem() { throw new Error('blocked'); } }), false);
+});
+
+// ===========================================================================
+// Background music wiring
+// ===========================================================================
+
+test('loop: music is active only while a game is in play', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  assert.equal(h.audio.musicActive, false, 'title');
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  assert.equal(h.audio.musicActive, true, 'playing');
+  h.input.queue.push(A({ hardDrop: true }));
+  h.frame();
+  assert.equal(h.state.phase, 'are');
+  assert.equal(h.audio.musicActive, true, 'ARE between pieces');
+  h.input.queue.push(A({ pause: true }));
+  h.frame();
+  assert.equal(h.audio.musicActive, false, 'paused');
+  h.input.queue.push(A({ pause: true }));
+  h.frame();
+  assert.equal(h.audio.musicActive, true, 'resumed');
+  h.state.board.cells[1][4] = 1;
+  h.input.queue.push(A({ hardDrop: true }));
+  for (let i = 0; i <= ARE_FRAMES + 1; i++) h.frame();
+  assert.equal(h.state.phase, 'gameOver');
+  assert.equal(h.audio.musicActive, false, 'game over');
+});
+
+test('loop: music keeps playing through the line-clear animation', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  fillRow(h.state.board, 21, [3, 4, 5, 6]);
+  h.state.active = spawnPiece('I');
+  h.input.queue.push(A({ hardDrop: true }));
+  h.frame();
+  assert.equal(h.state.phase, 'lineClear');
+  assert.equal(h.audio.musicActive, true);
+});
+
+test('loop: a new game restarts the song; unpausing does not', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  assert.equal(h.audio.restarts, 1);
+  h.input.queue.push(A({ pause: true }), A({ pause: true }));
+  h.frame(); h.frame();
+  assert.equal(h.audio.restarts, 1);
+});
+
+test('loop: tick() runs once per rendered frame', () => {
+  const h = loopHarness();
+  h.game.start();
+  for (let i = 0; i < 10; i++) h.frame();
+  assert.equal(h.audio.ticks, 10);
+});
+
+test('game.pause() (tab hidden / blur) stops the music immediately', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ start: true }));
+  h.frame();
+  assert.equal(h.audio.musicActive, true);
+  h.game.pause();
+  assert.equal(h.audio.musicActive, false, 'before the next frame — hidden tabs get none');
+});
+
+test('B toggles music in any phase, updates the button and persists tetris.bgmEnabled', () => {
+  assert.equal(BGM_KEY, 'tetris.bgmEnabled');
+  const storage = fakeStorage();
+  const h = loopHarness({ storage });
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ music: true }));
+  h.frame();                                          // title
+  assert.equal(h.audio.musicOn, false);
+  assert.equal(h.ui.musicShown.at(-1), false);
+  assert.equal(storage.data.get(BGM_KEY), '0');
+  assert.equal(h.state.phase, 'title', 'not a game action');
+  h.input.queue.push(A({ start: true }), A({ pause: true }), A({ music: true }));
+  h.frame(); h.frame(); h.frame();                    // on again while paused
+  assert.equal(h.audio.musicOn, true);
+  assert.equal(storage.data.get(BGM_KEY), '1');
+  assert.equal(h.audio.muted, false, 'B leaves the master mute alone');
+});
+
+test('M and B are independent', () => {
+  const h = loopHarness();
+  h.game.start();
+  h.frame();
+  h.input.queue.push(A({ mute: true }));
+  h.frame();
+  assert.deepEqual([h.audio.muted, h.audio.musicOn], [true, true]);
+  h.input.queue.push(A({ music: true }));
+  h.frame();
+  assert.deepEqual([h.audio.muted, h.audio.musicOn], [true, false]);
+});
+
+test('game.toggleMusic() / toggleMute() (footer buttons) behave like B / M', () => {
+  const storage = fakeStorage();
+  const h = loopHarness({ storage });
+  assert.equal(h.game.toggleMusic(), false);
+  assert.equal(storage.data.get(BGM_KEY), '0');
+  assert.equal(h.game.toggleMute(), true);
+  assert.equal(storage.data.get(MUTE_KEY), '1');
+  assert.deepEqual([h.ui.musicShown.at(-1), h.ui.mutedShown.at(-1)], [false, true]);
+});
+
+test('stored music preference is applied at startup; default is on', () => {
+  const off = loopHarness({ storage: fakeStorage({ [BGM_KEY]: '0' }) });
+  assert.equal(off.audio.musicOn, false);
+  assert.deepEqual(off.ui.musicShown, [false]);
+  const fresh = loopHarness({ storage: fakeStorage() });
+  assert.equal(fresh.audio.musicOn, true);
+  assert.deepEqual(fresh.ui.musicShown, [true]);
+});
+
+test('loadBgmEnabled: only an explicit 0 turns music off', () => {
+  assert.equal(loadBgmEnabled(fakeStorage({ [BGM_KEY]: '0' })), false);
+  for (const v of ['1', '', 'x', '2']) assert.equal(loadBgmEnabled(fakeStorage({ [BGM_KEY]: v })), true, JSON.stringify(v));
+  assert.equal(loadBgmEnabled(fakeStorage()), true);
+  assert.equal(loadBgmEnabled(null), true);
+  assert.equal(loadBgmEnabled({ getItem() { throw new Error('blocked'); } }), true);
 });

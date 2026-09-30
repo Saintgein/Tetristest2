@@ -17,6 +17,7 @@ import { KEY_BINDINGS, DAS_FRAMES, ARR_FRAMES } from './config.js';
  * @property {boolean} pause
  * @property {boolean} start
  * @property {boolean} mute
+ * @property {boolean} music
  * @property {-1|0|1}  menuX
  */
 
@@ -32,6 +33,7 @@ export function emptyActions() {
     pause: false,
     start: false,
     mute: false,
+    music: false,
     menuX: 0,
   };
 }
@@ -159,6 +161,7 @@ export function createInput(
     actions.pause = isPressed('pause');
     actions.start = isPressed('start');
     actions.mute = isPressed('mute');
+    actions.music = isPressed('music');
     actions.menuX = resolveHorizontal(isPressed('left'), isPressed('right'));
     if (anyPressed) clearPressed();
     return actions;

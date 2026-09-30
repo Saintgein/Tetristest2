@@ -31,6 +31,7 @@ export const GAME_OVER_DELAY_FRAMES = 60;         // Enter ignored for 1 s on th
 export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage keys
 export const MUTE_KEY = 'tetris.muted';
 export const START_LEVEL_KEY = 'tetris.startLevel';
+export const BGM_KEY = 'tetris.bgmEnabled';         // '1' | '0', default on
 
 // KeyboardEvent.code values (layout-independent physical keys).
 export const KEY_BINDINGS = {
@@ -43,7 +44,8 @@ export const KEY_BINDINGS = {
   hold:      ['KeyC', 'ShiftLeft', 'ShiftRight'],
   pause:     ['KeyP', 'Escape'],
   start:     ['Enter'],
-  mute:      ['KeyM'],
+  mute:      ['KeyM'],                    // master: all sound
+  music:     ['KeyB'],                    // background music only
 };
 
 // Per piece type index 1–7: face, highlight (top/left bevel), shadow (bottom/right bevel).

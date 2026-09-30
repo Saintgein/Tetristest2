@@ -408,8 +408,41 @@ frame cost pass in headless Firefox; still needs a human check on real hardware.
 
 ---
 
+## Milestone 6 — Background music ✅
+
+Goal: a looping chiptune soundtrack with its own toggle, without costing the
+frame loop anything.
+
+**Files:** `src/audio.js`, `src/game.js`, `src/input.js`, `src/ui.js`, `src/main.js`,
+`src/config.js`, `index.html`, `style.css`, `tests/audio.test.js`, `tests/game.test.js`,
+`tests/ui.test.js`, `tests/input.test.js`, `tests/perf.test.js`, `tests/music-perf.test.js`
+
+Verified with `npm test` (321 tests, green 4/4 runs; 21/22 deliberate bugs caught,
+and the survivor is behaviour-equivalent) and headless Firefox (24/24 music checks;
+all earlier suites still pass: 21, 21, 13, 13, 6).
+
+- [x] Sequencer on the Web Audio clock: one persistent oscillator per voice; notes are
+      AudioParam automation; one measure of lookahead; drift-free single anchor;
+      seamless loop
+- [x] 3 voices: lead (pulse 1, 25 %), harmony (pulse 2, 50 %), walking bass (triangle)
+- [x] *Korobeiniki* (public domain), A minor, 140 BPM, A A B form, 24 bars / ~41 s;
+      bar lengths validated at load
+- [x] Effect priority: effects duck the music voice on their channel for their
+      duration; the sequencer keeps its timeline
+- [x] B toggles music (M stays master mute); clickable `SOUND:` / `MUSIC:` footer
+      buttons with `aria-pressed`, which never take focus
+- [x] Pause (P/Esc, blur, hidden tab) and game over stop the music; resume continues on
+      the exact beat (a cut-off note plays its remainder); a new game restarts at bar 1
+- [x] Persisted as `tetris.bgmEnabled` (default on)
+- [x] Allocation checks: zero per frame and per note (settled JIT, own process), no
+      leak over 100 loops, ~2.5 B transient per pause/resume
+- [ ] Listen on real speakers and judge the mix and arrangement *(tests prove what is
+      scheduled, not how it sounds)*
+
+---
+
 ## Backlog (post-1.0, not scheduled)
 
 - Gamepad API support · touch controls · T-spin & back-to-back scoring ·
   configurable DAS/ARR in a settings menu · statistics screen (piece counts,
-  NES-style) · chiptune background music (Korobeiniki-style loop, synthesized)
+  NES-style) · game-over "stack fills gray" animation · a second music track

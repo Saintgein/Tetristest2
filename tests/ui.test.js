@@ -187,13 +187,51 @@ test('reduced motion: no level-up well flash', () => {
   assert.ok(!els.well.classes.has('well--flash'));
 });
 
-test('sound indicator: SOUND ON / SOUND OFF, written only on change', () => {
+test('sound toggle: SOUND: ON / SOUND: OFF, written only on change', () => {
   const sound = fakeElement();
   const ui = createUI({ ...setup().els, sound });
   ui.setMuted(true);
-  assert.equal(sound.textContent, 'SOUND OFF');
+  assert.equal(sound.textContent, 'SOUND: OFF');
   ui.setMuted(false);
-  assert.equal(sound.textContent, 'SOUND ON');
+  assert.equal(sound.textContent, 'SOUND: ON');
   ui.setMuted(false);
   assert.equal(sound.writes, 2);
+});
+
+// ---------- music ----------
+
+function toggleElement() {
+  const el = fakeElement();
+  el.attributes = {};
+  el.setAttribute = (name, value) => { el.attributes[name] = value; };
+  return el;
+}
+
+test('music toggle: MUSIC: ON / MUSIC: OFF with aria-pressed, written only on change', () => {
+  const music = toggleElement();
+  const ui = createUI({ ...setup().els, music });
+  ui.setMusic(true);
+  assert.equal(music.textContent, 'MUSIC: ON');
+  assert.equal(music.attributes['aria-pressed'], 'true');
+  ui.setMusic(false);
+  assert.equal(music.textContent, 'MUSIC: OFF');
+  assert.equal(music.attributes['aria-pressed'], 'false');
+  ui.setMusic(false);
+  assert.equal(music.writes, 2);
+});
+
+test('sound and music toggles are independent elements', () => {
+  const sound = toggleElement();
+  const music = toggleElement();
+  const ui = createUI({ ...setup().els, sound, music });
+  ui.setMuted(true);
+  ui.setMusic(true);
+  assert.deepEqual([sound.textContent, music.textContent], ['SOUND: OFF', 'MUSIC: ON']);
+  assert.deepEqual([sound.attributes['aria-pressed'], music.attributes['aria-pressed']], ['false', 'true']);
+});
+
+test('toggles are optional: no elements, no errors', () => {
+  const ui = createUI(setup().els);
+  ui.setMusic(true);
+  ui.setMuted(true);
 });

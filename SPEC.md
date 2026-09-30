@@ -134,6 +134,7 @@ export const LEVEL_UP_FLASH_FRAMES = 30;          // well-border flash after a l
 export const GAME_OVER_DELAY_FRAMES = 60;         // Enter ignored for 1 s on the game-over screen
 export const HI_SCORE_KEY = 'tetris.hiScore';     // localStorage keys
 export const MUTE_KEY = 'tetris.muted';           // '1' | '0'
+export const BGM_KEY = 'tetris.bgmEnabled';       // '1' | '0'; missing = on
 export const START_LEVEL_KEY = 'tetris.startLevel';
 
 export const KEY_BINDINGS = {
@@ -146,7 +147,8 @@ export const KEY_BINDINGS = {
   hold:      ['KeyC', 'ShiftLeft', 'ShiftRight'],
   pause:     ['KeyP', 'Escape'],
   start:     ['Enter'],
-  mute:      ['KeyM'],
+  mute:      ['KeyM'],                   // master: all sound
+  music:     ['KeyB'],                   // background music only
 };
 
 // Per piece type index 1–7: face, highlight (top/left bevel), shadow (bottom/right bevel)
@@ -261,6 +263,7 @@ export function createInput(
  * @property {boolean} pause      edge
  * @property {boolean} start      edge
  * @property {boolean} mute       edge
+ * @property {boolean} music      edge (B)
  * @property {-1|0|1}  menuX      edge left/right (title screen level select)
  */
 ```
@@ -372,7 +375,10 @@ spec pixel : 2×2 white-ish at (3,3) for 16-bit sheen   ┘
 
 ```js
 export function createUI(elements, { reducedMotion = () => false } = {}): UI;
-// UI also has setMuted(muted): writes "SOUND ON" / "SOUND OFF" into elements.sound
+// UI also has setMuted(muted) and setMusic(on): footer <button>s elements.sound / elements.music,
+// text "SOUND: ON|OFF" / "MUSIC: ON|OFF" plus aria-pressed. main.js wires their clicks to
+// game.toggleMute() / game.toggleMusic() and cancels pointerdown so they never take focus
+// (Space and Enter must keep driving the game).
 /** @typedef {Object} UI
  * @property {(state: GameState) => void} update   // writes HUD only when values change
  */
@@ -433,6 +439,60 @@ export function noteFreq(midi): number;
 - **Autoplay:** no context exists until `unlock()`. `play()` before that, with
   no Web Audio, or with unknown names is a silent no-op, and errors never
   propagate to the game.
+- **Background music** (same module):
+  ```js
+  createAudio({ ..., musicEnabled = true })
+  audio.setMusicEnabled(on) / toggleMusic(): boolean   // player preference (B)
+  audio.setMusicActive(on)                              // game-driven, idempotent: in play or not
+  audio.restartMusic()                                  // bar 1 (new game)
+  audio.tick()                                          // once per rendered frame
+  audio.musicEnabled / musicPlaying / musicBeat         // getters
+  export const BGM, MUSIC_LOOKAHEAD_S; export function compileVoice(bars), parseNote(name)
+  ```
+  - **Song:** "Korobeiniki" (Russian folk song, public domain) in A minor at
+    140 BPM, 4/4. The form is A A B, 24 bars (96 beats, about 41 s per loop).
+    The melody is the folk tune; the harmony and walking bass are an original
+    arrangement.
+  - **Voices:** lead on pulse 1 (25 % duty), harmony on pulse 2 (50 %), and a
+    walking quarter-note bass on the triangle.
+  - **Song data:** notes are written as bars of `"NOTE:beats"`. `compileVoice`
+    rejects any bar that isn't 4 beats and compiles the song into typed arrays
+    at load.
+  - **One persistent oscillator per voice:** a note is a frequency plus
+    gain-envelope automation on it (4 ms attack, 20 ms release, gate 80–95 %),
+    so no nodes are created per note.
+  - **Signal chain:** `osc → env → duck → mix → musicGain → master`. The master
+    mute (M) therefore silences music too. Muting is volume, not transport:
+    the song keeps its place.
+  - **Scheduling:** `tick()` schedules every note that starts before
+    `currentTime + MUSIC_LOOKAHEAD_S`, which is one measure (≈1.71 s).
+  - **No drift:** note times come from a single anchor,
+    `anchorTime + (beat − anchorBeat) × 60/tempo`, with beats counted
+    absolutely across loops, so nothing accumulates and the loop is seamless.
+  - **Pause:** saves the exact beat (`resumeBeat`), cancels future automation
+    and fades the voices over 5 ms.
+  - **Resume:** re-anchors at `now + 50 ms` and continues from `resumeBeat`.
+    A note that was cut off plays its remainder first; nothing is skipped or
+    restarted.
+  - **When music plays:** only while the context exists, `enabled`, and
+    `wanted`. `createGame` sets `wanted = phase ∈ {playing, lineClear, are}`
+    every frame and calls `restartMusic()` on title → playing. `game.pause()`
+    (blur, hidden tab) stops the music immediately, because hidden tabs get no
+    more frames.
+  - **Effects take precedence:** `play(name)` ducks the music voice on each
+    channel the effect uses (pulse 1 → lead, pulse 2 → harmony, triangle →
+    bass; noise has no voice) to 0 for the effect's length on that channel,
+    then restores it. The sequencer keeps scheduling underneath, so the music
+    comes back on the beat.
+  - **Allocation-free:** `tick()` and note scheduling only walk numeric cursors
+    and typed arrays and call AudioParam methods. `startMusic()` reads
+    `resumeBeat` from state instead of taking it as an argument, because a
+    fractional argument would be boxed on every resume. A cap of 256 notes per
+    voice per tick turns any data or timing bug into a missed note instead of
+    an infinite loop.
+  - **Browser boundary:** calls into native AudioParams may still box their
+    double arguments inside the engine, but only when a note is scheduled
+    (about 9 per second), and that is outside our code.
 - **Events:** clears emit `'single'`/`'double'`/`'triple'`/`'tetris'`.
   `'softDrop'` fires once when a soft drop starts moving the piece
   (`state.softDropping`), not on every row.
@@ -456,7 +516,10 @@ export function loadMuted(storage): boolean;            // default false
 // createGame also: applies the stored mute setting at startup (audio.setMuted,
 // ui.setMuted); handles actions.mute in every phase via audio.toggleMute() and
 // saves it; saves startLevel on title → playing. main.js: ?level beats the
-// stored start level.
+// stored start level. Same for music: loadBgmEnabled(storage) (default on) at
+// startup, actions.music (B) in every phase via audio.toggleMusic(), saved under
+// BGM_KEY. Game also exposes toggleMute() / toggleMusic() for the footer buttons.
+export function loadBgmEnabled(storage): boolean;       // only an explicit '0' turns it off
 
 // Fixed-timestep clock (pure; see §9)
 export function createClock(): { last: number | null, acc: number };
@@ -751,6 +814,17 @@ lockAndAdvance():
   - No per-frame string keys, template strings, destructuring iterators or
     closures.
   - Collision reads cached shapes (`getCells`), never `getAbsoluteCells`.
+- **Music allocation checks (`tests/music-perf.test.js`, its own process):**
+  - What's measured: idle ticks, ~67k notes over ~290 loops, a 60 fps frame
+    loop, pause/resume transitions, and retained heap from loop 10 to 100.
+  - The fake Web Audio keeps its methods on shared prototypes, like the real
+    API. Per-instance closures would make call sites megamorphic, and V8 would
+    then box arguments.
+  - The fake's audio clock advances in integer seconds, because fractional
+    stores in the harness itself can box.
+  - Measurements count scavenges as well as bytes, and re-measure until the JIT
+    has settled (up to 6 windows). Under parallel test load V8 delivers
+    optimized code later, and unoptimized tiers box doubles.
 - **Reduced motion** (`prefers-reduced-motion` or `?reducedMotion`):
   - no blinking prompt and no level-up flash;
   - cleared rows are cut instantly, with no flash, wipe or tetris wash.
