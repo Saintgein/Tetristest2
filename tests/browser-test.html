@@ -251,7 +251,52 @@
       check('desktop: holding KeyP keeps game playing (no rapid toggle)', dGame.getState().phase === 'playing');
       dWin.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyP', bubbles: true }));
 
-      // 10. Console Cleanliness
+      // 10. PWA Manifest & Service Worker Verification
+      const manifestLink = dDoc.querySelector('link[rel="manifest"]');
+      check('manifest link exists in head', Boolean(manifestLink) && manifestLink.getAttribute('href') === 'manifest.webmanifest');
+
+      let manifestData = null;
+      try {
+        const res = await fetch('/manifest.webmanifest');
+        check('manifest fetch returns 200 OK', res.ok, `Status: ${res.status}`);
+        manifestData = await res.json();
+      } catch (err) {
+        check('manifest loads cleanly as JSON', false, err.message);
+      }
+
+      if (manifestData) {
+        check('manifest has correct name and short_name', manifestData.name === 'NES Tetris' && manifestData.short_name === 'Tetris');
+        check('manifest has standalone display mode', manifestData.display === 'standalone');
+        check('manifest has 192 and 512 icons with any maskable purpose',
+          Array.isArray(manifestData.icons) &&
+          manifestData.icons.some((i) => i.src === 'icons/icon-192.png' && i.sizes === '192x192' && i.purpose === 'any maskable') &&
+          manifestData.icons.some((i) => i.src === 'icons/icon-512.png' && i.sizes === '512x512' && i.purpose === 'any maskable')
+        );
+      }
+
+      // Apple web app tags
+      const appleMeta = dDoc.querySelector('meta[name="apple-mobile-web-app-capable"]');
+      const appleIcon = dDoc.querySelector('link[rel="apple-touch-icon"]');
+      check('apple mobile web app tags exist in head',
+        appleMeta?.getAttribute('content') === 'yes' &&
+        appleIcon?.getAttribute('href') === 'icons/icon-192.png'
+      );
+
+      // Service Worker registration check
+      if ('serviceWorker' in dWin.navigator) {
+        let reg = await dWin.navigator.serviceWorker.getRegistration();
+        if (!reg) {
+          for (let i = 0; i < 15 && !reg; i++) {
+            await wait(100);
+            reg = await dWin.navigator.serviceWorker.getRegistration();
+          }
+        }
+        check('service worker registers without unhandled errors', Boolean(reg || dWin.__swReg));
+      } else {
+        check('service worker supported in browser', false, 'serviceWorker not in navigator');
+      }
+
+      // 11. Console Cleanliness
       check('console has zero unhandled errors', errors.length === 0, errors.join(', '));
 
       // Display results in HTML

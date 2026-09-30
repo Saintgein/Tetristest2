@@ -207,3 +207,17 @@ window.addEventListener('resize', fitScale);
 window.addEventListener('orientationchange', fitScale);
 // Web font metrics change the cabinet size once loaded
 document.fonts?.ready.then(fitScale);
+
+// Service Worker Registration for PWA (offline play).
+// Only register on http/https to avoid errors when loaded via file://.
+if ('serviceWorker' in navigator && (location.protocol === 'http:' || location.protocol === 'https:')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then((reg) => {
+        if (params.has('debug')) window.__swReg = reg;
+      })
+      .catch((err) => {
+        console.warn('[PWA] ServiceWorker registration failed:', err);
+      });
+  });
+}

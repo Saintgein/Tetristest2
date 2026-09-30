@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "test:browser": "node tests/run-browser-tests.js"
+    "test:browser": "node tests/run-browser-tests.js",
+    "generate:icons": "node scripts/generate-icons.js"
   }
 }
