@@ -405,3 +405,320 @@ test('press(): programmatic press edges; unknown actions ignored', () => {
   assert.equal(a.start, true);
   assert.equal(input.poll().start, false);
 });
+
+// ---------- Touch Controls & Multi-Touch ----------
+
+function fakeTouchElement(action) {
+  const listeners = {};
+  const captures = new Set();
+  const classList = {
+    classes: new Set(),
+    add(c) { this.classes.add(c); },
+    remove(c) { this.classes.delete(c); },
+    contains(c) { return this.classes.has(c); },
+  };
+  return {
+    dataset: { action },
+    getAttribute(name) { return name === 'data-action' ? action : null; },
+    classList,
+    addEventListener(type, fn) { (listeners[type] ??= new Set()).add(fn); },
+    removeEventListener(type, fn) { listeners[type]?.delete(fn); },
+    emit(type, event = {}) {
+      event.currentTarget = this;
+      event.target ??= this;
+      event.preventDefault ??= () => { event.defaultPrevented = true; };
+      for (const fn of listeners[type] ?? []) fn(event);
+      return event;
+    },
+    setPointerCapture(id) { captures.add(id); },
+    releasePointerCapture(id) { captures.delete(id); },
+    hasPointerCapture(id) { return captures.has(id); },
+    count(type) { return listeners[type]?.size ?? 0; },
+  };
+}
+
+function fakeTouchRoot(actions) {
+  const buttons = actions.map((act) => fakeTouchElement(act));
+  return {
+    buttons,
+    querySelectorAll(sel) {
+      if (sel === '[data-action]') return buttons;
+      return [];
+    },
+  };
+}
+
+const touchPointer = (id, fields = {}) => ({
+  pointerId: id,
+  pointerType: 'touch',
+  button: 0,
+  defaultPrevented: false,
+  preventDefault() { this.defaultPrevented = true; },
+  ...fields,
+});
+
+test('touch: tapping each virtual button sets its action on the next poll', () => {
+  const root = fakeTouchRoot(['left', 'right', 'softDrop', 'hardDrop', 'rotateCW', 'rotateCCW', 'hold', 'pause']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+
+  const btnByAction = Object.fromEntries(root.buttons.map((b) => [b.dataset.action, b]));
+
+  // Left
+  btnByAction.left.emit('pointerdown', touchPointer(1));
+  btnByAction.left.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().shift, -1);
+  assert.equal(input.poll().shift, 0);
+
+  // Right
+  btnByAction.right.emit('pointerdown', touchPointer(1));
+  btnByAction.right.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().shift, 1);
+  assert.equal(input.poll().shift, 0);
+
+  // Soft Drop
+  btnByAction.softDrop.emit('pointerdown', touchPointer(1));
+  btnByAction.softDrop.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().softDrop, true);
+  assert.equal(input.poll().softDrop, false);
+
+  // Hard Drop
+  btnByAction.hardDrop.emit('pointerdown', touchPointer(1));
+  btnByAction.hardDrop.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().hardDrop, true);
+  assert.equal(input.poll().hardDrop, false);
+
+  // Rotate CW (A)
+  btnByAction.rotateCW.emit('pointerdown', touchPointer(1));
+  btnByAction.rotateCW.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().rotate, 1);
+  assert.equal(input.poll().rotate, 0);
+
+  // Rotate CCW (B)
+  btnByAction.rotateCCW.emit('pointerdown', touchPointer(1));
+  btnByAction.rotateCCW.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().rotate, -1);
+  assert.equal(input.poll().rotate, 0);
+
+  // Hold
+  btnByAction.hold.emit('pointerdown', touchPointer(1));
+  btnByAction.hold.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().hold, true);
+  assert.equal(input.poll().hold, false);
+
+  // Pause
+  btnByAction.pause.emit('pointerdown', touchPointer(1));
+  btnByAction.pause.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().pause, true);
+  assert.equal(input.poll().pause, false);
+});
+
+test('touch: holding Left charges DAS and repeats with ARR', () => {
+  const root = fakeTouchRoot(['left']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, { dasFrames: 10, arrFrames: 2 }, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  btn.emit('pointerdown', touchPointer(1));
+  assert.equal(btn.classList.contains('is-pressed'), true);
+
+  const shifts = [];
+  for (let i = 0; i < 15; i++) {
+    const { shift } = input.poll();
+    if (shift !== 0) shifts.push([i, shift]);
+  }
+  // Frame 0: initial shift. Frames 10, 12, 14: ARR repeat
+  assert.deepEqual(shifts, [[0, -1], [10, -1], [12, -1], [14, -1]]);
+
+  btn.emit('pointerup', touchPointer(1));
+  assert.equal(btn.classList.contains('is-pressed'), false);
+  assert.equal(input.poll().shift, 0);
+});
+
+test('touch: multi-touch holding Left while tapping Rotate CW', () => {
+  const root = fakeTouchRoot(['left', 'rotateCW']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, { dasFrames: 10, arrFrames: 2 }, { touchRoot: root });
+  const [btnLeft, btnRotate] = root.buttons;
+
+  // Thumb 1 presses Left
+  btnLeft.emit('pointerdown', touchPointer(1));
+  const poll0 = input.poll();
+  assert.equal(poll0.shift, -1);
+  assert.equal(poll0.rotate, 0);
+
+  // Thumb 2 taps Rotate CW while Thumb 1 continues holding Left
+  btnRotate.emit('pointerdown', touchPointer(2));
+  const poll1 = input.poll();
+  assert.equal(poll1.rotate, 1, 'rotate triggered');
+  assert.equal(poll1.shift, 0, 'DAS still charging');
+
+  // Thumb 2 released
+  btnRotate.emit('pointerup', touchPointer(2));
+  assert.equal(btnRotate.classList.contains('is-pressed'), false);
+  assert.equal(btnLeft.classList.contains('is-pressed'), true);
+
+  // Poll through frames until DAS fires
+  let dasFired = false;
+  for (let i = 2; i <= 10; i++) {
+    const a = input.poll();
+    assert.equal(a.rotate, 0);
+    if (i === 10) {
+      assert.equal(a.shift, -1, 'DAS fires for held Left');
+      dasFired = true;
+    }
+  }
+  assert.ok(dasFired);
+
+  // Thumb 1 released
+  btnLeft.emit('pointerup', touchPointer(1));
+  assert.equal(btnLeft.classList.contains('is-pressed'), false);
+  assert.equal(input.poll().shift, 0);
+});
+
+test('touch: multi-touch holding Soft Drop while steering Left', () => {
+  const root = fakeTouchRoot(['softDrop', 'left']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btnDown, btnLeft] = root.buttons;
+
+  btnDown.emit('pointerdown', touchPointer(1));
+  assert.equal(input.poll().softDrop, true);
+
+  btnLeft.emit('pointerdown', touchPointer(2));
+  const both = input.poll();
+  assert.equal(both.softDrop, true);
+  assert.equal(both.shift, -1);
+
+  btnLeft.emit('pointerup', touchPointer(2));
+  const downOnly = input.poll();
+  assert.equal(downOnly.softDrop, true);
+  assert.equal(downOnly.shift, 0);
+
+  btnDown.emit('pointerup', touchPointer(1));
+  assert.equal(input.poll().softDrop, false);
+});
+
+test('touch: setPointerCapture and releasePointerCapture are called', () => {
+  const root = fakeTouchRoot(['right']);
+  const target = recordingTarget();
+  createInput(target, undefined, undefined, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  const down = btn.emit('pointerdown', touchPointer(5));
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(btn.hasPointerCapture(5), true);
+
+  const up = btn.emit('pointerup', touchPointer(5));
+  assert.equal(up.defaultPrevented, true);
+  assert.equal(btn.hasPointerCapture(5), false);
+});
+
+test('touch: pointerleave does not release if pointer is captured (thumb drift)', () => {
+  const root = fakeTouchRoot(['left']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  btn.emit('pointerdown', touchPointer(3));
+  assert.equal(btn.hasPointerCapture(3), true);
+  input.poll(); // consume fresh press
+
+  // Thumb drifts slightly outside the button boundary
+  btn.emit('pointerleave', touchPointer(3));
+  assert.equal(btn.classList.contains('is-pressed'), true, 'still pressed');
+
+  // Release occurs when thumb is lifted
+  btn.emit('pointerup', touchPointer(3));
+  assert.equal(btn.classList.contains('is-pressed'), false);
+  assert.equal(btn.hasPointerCapture(3), false);
+});
+
+test('touch: uncaptured pointerleave releases the button', () => {
+  const root = fakeTouchRoot(['right']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  btn.emit('pointerdown', touchPointer(4));
+  btn.releasePointerCapture(4); // simulate uncaptured pointer (e.g. mouse or unsupported)
+
+  btn.emit('pointerleave', touchPointer(4));
+  assert.equal(btn.classList.contains('is-pressed'), false);
+  input.poll();
+  assert.equal(input.poll().shift, 0);
+});
+
+test('touch: pointercancel releases the button and clears capture', () => {
+  const root = fakeTouchRoot(['hardDrop']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  btn.emit('pointerdown', touchPointer(7));
+  assert.equal(btn.hasPointerCapture(7), true);
+  assert.equal(btn.classList.contains('is-pressed'), true);
+
+  btn.emit('pointercancel', touchPointer(7));
+  assert.equal(btn.hasPointerCapture(7), false);
+  assert.equal(btn.classList.contains('is-pressed'), false);
+});
+
+test('touch: contextmenu is suppressed on virtual buttons', () => {
+  const root = fakeTouchRoot(['hold']);
+  const target = recordingTarget();
+  createInput(target, undefined, undefined, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  const e = btn.emit('contextmenu', { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
+  assert.equal(e.defaultPrevented, true);
+});
+
+test('touch: reset() clears all active touch pointers and pressed classes', () => {
+  const root = fakeTouchRoot(['left', 'softDrop']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btnLeft, btnDown] = root.buttons;
+
+  btnLeft.emit('pointerdown', touchPointer(1));
+  btnDown.emit('pointerdown', touchPointer(2));
+  assert.equal(btnLeft.classList.contains('is-pressed'), true);
+  assert.equal(btnDown.classList.contains('is-pressed'), true);
+
+  input.reset();
+  assert.equal(btnLeft.classList.contains('is-pressed'), false);
+  assert.equal(btnDown.classList.contains('is-pressed'), false);
+  assert.deepEqual(input.poll(), emptyActions());
+});
+
+test('touch: destroy() unbinds all touch listeners', () => {
+  const root = fakeTouchRoot(['left', 'rotateCW']);
+  const target = recordingTarget();
+  const input = createInput(target, undefined, undefined, { touchRoot: root });
+  const [btn] = root.buttons;
+
+  assert.equal(btn.count('pointerdown'), 1);
+  assert.equal(btn.count('pointerup'), 1);
+  assert.equal(btn.count('pointercancel'), 1);
+  assert.equal(btn.count('pointerleave'), 1);
+  assert.equal(btn.count('contextmenu'), 1);
+
+  input.destroy();
+  assert.equal(btn.count('pointerdown'), 0);
+  assert.equal(btn.count('pointerup'), 0);
+  assert.equal(btn.count('pointercancel'), 0);
+  assert.equal(btn.count('pointerleave'), 0);
+  assert.equal(btn.count('contextmenu'), 0);
+});
+
+test('touch: zero allocations - poll() reuses preallocated actions object', () => {
+  const root = fakeTouchRoot(['left', 'rotateCW']);
+  const input = createInput(recordingTarget(), undefined, undefined, { touchRoot: root });
+  const a1 = input.poll();
+  root.buttons[0].emit('pointerdown', touchPointer(1));
+  const a2 = input.poll();
+  assert.equal(a1, a2, 'poll() reuses the preallocated Actions instance');
+  root.buttons[1].emit('pointerdown', touchPointer(2));
+  const a3 = input.poll();
+  assert.equal(a2, a3, 'poll() reuses the preallocated Actions instance with multi-touch');
+});

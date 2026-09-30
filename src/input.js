@@ -76,16 +76,17 @@ const NON_START_TARGETS = 'button, a, input, select, textarea, [data-no-start]';
  * @param {EventTarget} target receives keydown / keyup / blur / pointerdown (window in the browser)
  * @param {Record<string, string[]>} bindings action → KeyboardEvent.code list
  * @param {{ dasFrames?: number, arrFrames?: number }} [timing]
- * @param {{ keyFallbacks?: Record<string, string>, pointerStart?: boolean }} [options]
+ * @param {{ keyFallbacks?: Record<string, string>, pointerStart?: boolean, touchRoot?: Element|null }} [options]
  *        keyFallbacks: KeyboardEvent.key → action when the code is empty/unbound;
- *        pointerStart: a primary click/tap anywhere (except controls) presses Start
- * @returns {{ poll(): Actions, press(action: string): void, reset(): void, destroy(): void }}
+ *        pointerStart: a primary click/tap anywhere (except controls) presses Start;
+ *        touchRoot: container element with [data-action] virtual buttons
+ * @returns {{ poll(): Actions, press(action: string): void, reset(): void, destroy(): void, bindTouch(element: Element): void }}
  */
 export function createInput(
   target = window,
   bindings = KEY_BINDINGS,
   { dasFrames = DAS_FRAMES, arrFrames = ARR_FRAMES } = {},
-  { keyFallbacks = KEY_FALLBACKS, pointerStart = true } = {},
+  { keyFallbacks = KEY_FALLBACKS, pointerStart = true, touchRoot = null } = {},
 ) {
   // Everything below is preallocated: key handling and poll() never allocate
   // (Set add/delete/clear churn their backing tables in V8).
@@ -102,6 +103,19 @@ export function createInput(
       codeDown.set(code, false);
     }
   }
+
+  // Preallocated multi-touch tracking for virtual buttons (up to 16 concurrent touch points).
+  // Strictly zero allocations during touch events and game poll ticks.
+  const MAX_TOUCH_POINTERS = 16;
+  const activePointerIds = new Int32Array(MAX_TOUCH_POINTERS);
+  const activePointerActions = new Array(MAX_TOUCH_POINTERS);
+  const activePointerElements = new Array(MAX_TOUCH_POINTERS);
+  activePointerIds.fill(-1);
+  for (let i = 0; i < MAX_TOUCH_POINTERS; i++) {
+    activePointerActions[i] = '';
+    activePointerElements[i] = null;
+  }
+  const boundButtons = [];
   // key → { action, id }: the id stands in for the missing code in codeDown
   const fallbackByKey = new Map();
   for (const [key, action] of Object.entries(keyFallbacks)) {
@@ -182,10 +196,173 @@ export function createInput(
   function reset() {
     for (const code of codeDown.keys()) codeDown.set(code, false);
     for (const action of actionNames) heldCount[action] = 0;
+    for (let i = 0; i < MAX_TOUCH_POINTERS; i++) {
+      const el = activePointerElements[i];
+      const pid = activePointerIds[i];
+      if (el) {
+        el.classList?.remove?.('is-pressed');
+        try {
+          if (typeof el.hasPointerCapture === 'function' && el.hasPointerCapture(pid)) {
+            el.releasePointerCapture(pid);
+          }
+        } catch { /* ignore */ }
+      }
+      activePointerIds[i] = -1;
+      activePointerActions[i] = '';
+      activePointerElements[i] = null;
+    }
     clearPressed();
     lastHorizontal = 0;
     das.dir = 0;
     das.frames = 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // Virtual touch controls: Pointer Events with setPointerCapture (zero-alloc)
+  // -------------------------------------------------------------------------
+
+  function onTouchButtonPointerDown(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const btn = e.currentTarget || e.target;
+    const action = btn?.getAttribute?.('data-action') ?? btn?.dataset?.action;
+    if (!action || !(action in pressed)) return;
+
+    e.preventDefault?.();
+
+    try {
+      if (typeof btn.setPointerCapture === 'function') {
+        btn.setPointerCapture(e.pointerId);
+      }
+    } catch { /* ignore unsupported capture */ }
+
+    let slot = -1;
+    let emptySlot = -1;
+    for (let i = 0; i < MAX_TOUCH_POINTERS; i++) {
+      if (activePointerIds[i] === e.pointerId) {
+        slot = i;
+        break;
+      }
+      if (emptySlot === -1 && activePointerIds[i] === -1) {
+        emptySlot = i;
+      }
+    }
+
+    if (slot !== -1) {
+      const oldAction = activePointerActions[slot];
+      if (oldAction !== action) {
+        heldCount[oldAction]--;
+        if (heldCount[oldAction] < 0) heldCount[oldAction] = 0;
+        activePointerActions[slot] = action;
+        activePointerElements[slot] = btn;
+        heldCount[action]++;
+        if (heldCount[action] === 1) {
+          press(action);
+          if (action === 'left') lastHorizontal = -1;
+          else if (action === 'right') lastHorizontal = 1;
+        }
+      }
+    } else if (emptySlot !== -1) {
+      activePointerIds[emptySlot] = e.pointerId;
+      activePointerActions[emptySlot] = action;
+      activePointerElements[emptySlot] = btn;
+      heldCount[action]++;
+      if (heldCount[action] === 1) {
+        press(action);
+        if (action === 'left') lastHorizontal = -1;
+        else if (action === 'right') lastHorizontal = 1;
+      }
+    }
+
+    btn.classList?.add?.('is-pressed');
+  }
+
+  function releasePointerSlot(pointerId, targetElement) {
+    for (let i = 0; i < MAX_TOUCH_POINTERS; i++) {
+      if (activePointerIds[i] === pointerId) {
+        const action = activePointerActions[i];
+        const el = activePointerElements[i] || targetElement;
+        activePointerIds[i] = -1;
+        activePointerActions[i] = '';
+        activePointerElements[i] = null;
+
+        if (el) {
+          el.classList?.remove?.('is-pressed');
+          try {
+            if (typeof el.hasPointerCapture === 'function' && el.hasPointerCapture(pointerId)) {
+              el.releasePointerCapture(pointerId);
+            }
+          } catch { /* ignore */ }
+        }
+
+        if (action && action in heldCount) {
+          heldCount[action]--;
+          if (heldCount[action] < 0) heldCount[action] = 0;
+        }
+        break;
+      }
+    }
+  }
+
+  function onTouchButtonPointerUp(e) {
+    e.preventDefault?.();
+    releasePointerSlot(e.pointerId, e.currentTarget || e.target);
+  }
+
+  function onTouchButtonPointerCancel(e) {
+    e.preventDefault?.();
+    releasePointerSlot(e.pointerId, e.currentTarget || e.target);
+  }
+
+  function onTouchButtonPointerLeave(e) {
+    const btn = e.currentTarget || e.target;
+    try {
+      if (typeof btn?.hasPointerCapture === 'function' && btn.hasPointerCapture(e.pointerId)) {
+        return; // Pointer captured: thumb sliding slightly outside button boundary is still holding it
+      }
+    } catch { /* ignore */ }
+
+    releasePointerSlot(e.pointerId, btn);
+  }
+
+  function onTouchContextMenu(e) {
+    e.preventDefault?.();
+  }
+
+  function unbindTouch() {
+    for (let i = 0; i < boundButtons.length; i++) {
+      const btn = boundButtons[i];
+      btn.removeEventListener?.('pointerdown', onTouchButtonPointerDown);
+      btn.removeEventListener?.('pointerup', onTouchButtonPointerUp);
+      btn.removeEventListener?.('pointercancel', onTouchButtonPointerCancel);
+      btn.removeEventListener?.('pointerleave', onTouchButtonPointerLeave);
+      btn.removeEventListener?.('contextmenu', onTouchContextMenu);
+    }
+    boundButtons.length = 0;
+  }
+
+  function bindTouch(root) {
+    if (!root) return;
+    unbindTouch();
+    const list = typeof root.querySelectorAll === 'function'
+      ? root.querySelectorAll('[data-action]')
+      : [];
+    const elements = list && list.length > 0
+      ? Array.from(list)
+      : (typeof root.getAttribute === 'function' && root.getAttribute('data-action') ? [root] : []);
+
+    for (let i = 0; i < elements.length; i++) {
+      const btn = elements[i];
+      btn.addEventListener?.('pointerdown', onTouchButtonPointerDown);
+      btn.addEventListener?.('pointerup', onTouchButtonPointerUp);
+      btn.addEventListener?.('pointercancel', onTouchButtonPointerCancel);
+      btn.addEventListener?.('pointerleave', onTouchButtonPointerLeave);
+      btn.addEventListener?.('contextmenu', onTouchContextMenu);
+      boundButtons.push(btn);
+    }
+  }
+
+  if (touchRoot) {
+    bindTouch(touchRoot);
   }
 
   function resolveHorizontal(left, right) {
@@ -229,6 +406,14 @@ export function createInput(
       target.removeEventListener('keyup', onKeyUp, KEY_LISTENER_OPTIONS);
       target.removeEventListener('blur', reset);
       if (pointerStart) target.removeEventListener('pointerdown', onPointerDown, POINTER_LISTENER_OPTIONS);
+      unbindTouch();
     },
+    bindTouch,
   };
+}
+
+export function bindTouchControls(root, input) {
+  if (typeof input?.bindTouch === 'function') {
+    input.bindTouch(root);
+  }
 }

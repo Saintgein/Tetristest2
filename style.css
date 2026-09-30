@@ -34,6 +34,10 @@ html,
 body {
   height: 100%;
   margin: 0;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 body {
@@ -49,7 +53,6 @@ body {
   -webkit-font-smoothing: none;
   -moz-osx-font-smoothing: grayscale;
   font-smooth: never;
-  user-select: none;
 }
 
 h1, h2, p, dl, dd, ul {
@@ -211,8 +214,320 @@ h1, h2, p, dl, dd, ul {
   animation: blink 1s steps(1, end) infinite;
 }
 
-@keyframes blink {
-  50% { visibility: hidden; }
+/* ---------- Touch Controls ---------- */
+
+.touch-controls {
+  display: none;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  gap: calc(8 * var(--px));
+  width: 100%;
+  max-width: calc(364 * var(--px));
+  padding-top: calc(4 * var(--px));
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media (pointer: coarse) {
+  .touch-controls {
+    display: flex;
+  }
+}
+
+.has-touch .touch-controls {
+  display: flex;
+}
+
+/* D-Pad 3x3 layout */
+.touch-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, calc(38 * var(--px)));
+  grid-template-rows: repeat(3, calc(38 * var(--px)));
+  gap: calc(2 * var(--px));
+  position: relative;
+  background: var(--frame-dark);
+  padding: calc(2 * var(--px));
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--frame-dark),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--frame-light),
+    0 0 0 var(--px) #000;
+}
+
+.touch-dpad-center {
+  grid-column: 2;
+  grid-row: 2;
+  background: var(--frame);
+  box-shadow: inset 0 0 0 var(--px) rgba(0, 0, 0, 0.4);
+}
+
+.touch-btn--up    { grid-column: 2; grid-row: 1; }
+.touch-btn--left  { grid-column: 1; grid-row: 2; }
+.touch-btn--right { grid-column: 3; grid-row: 2; }
+.touch-btn--down  { grid-column: 2; grid-row: 3; }
+
+/* Base touch button style */
+.touch-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: var(--frame);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: calc(8 * var(--px));
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--frame-light),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--frame-dark),
+    0 0 0 var(--px) #000;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch-btn:active,
+.touch-btn.is-pressed {
+  background: var(--frame-dark);
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--frame-dark),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--frame-light),
+    0 0 0 var(--px) #000;
+  transform: translate(var(--px), var(--px));
+}
+
+.touch-icon {
+  font-size: calc(12 * var(--px));
+  color: var(--cyan);
+}
+
+.touch-btn--up .touch-icon {
+  color: var(--yellow);
+}
+
+.touch-label {
+  font-size: calc(6 * var(--px));
+  color: var(--text-dim);
+  margin-top: calc(2 * var(--px));
+}
+
+/* Action controls group (Utility + A/B) */
+.touch-actions-group {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--px));
+}
+
+/* Utility buttons: HOLD & PAUSE */
+.touch-utility {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--px));
+  align-items: center;
+}
+
+.touch-btn--pill {
+  width: calc(64 * var(--px));
+  height: calc(26 * var(--px));
+  border-radius: calc(13 * var(--px));
+  font-size: calc(7 * var(--px));
+  letter-spacing: calc(1 * var(--px));
+  background: var(--frame);
+  color: var(--text-dim);
+}
+
+.touch-btn--pill:active,
+.touch-btn--pill.is-pressed {
+  color: var(--yellow);
+}
+
+/* Action buttons: B & A */
+.touch-actions {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--px));
+  position: relative;
+  padding: calc(6 * var(--px)) 0;
+}
+
+.touch-btn--action {
+  width: calc(48 * var(--px));
+  height: calc(48 * var(--px));
+  border-radius: 50%;
+  position: relative;
+}
+
+.touch-btn--b {
+  background: #700028;
+  transform: translateY(calc(10 * var(--px)));
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--magenta),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 #380014,
+    0 0 0 var(--px) #000;
+}
+
+.touch-btn--b:active,
+.touch-btn--b.is-pressed {
+  background: #4a001a;
+  transform: translateY(calc(11 * var(--px)));
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 #380014,
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--magenta),
+    0 0 0 var(--px) #000;
+}
+
+.touch-btn--a {
+  background: #a82000;
+  transform: translateY(calc(-6 * var(--px)));
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 var(--yellow),
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 #541000,
+    0 0 0 var(--px) #000;
+}
+
+.touch-btn--a:active,
+.touch-btn--a.is-pressed {
+  background: #681400;
+  transform: translateY(calc(-5 * var(--px)));
+  box-shadow:
+    inset calc(2 * var(--px)) calc(2 * var(--px)) 0 0 #541000,
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 0 var(--yellow),
+    0 0 0 var(--px) #000;
+}
+
+.touch-letter {
+  font-size: calc(14 * var(--px));
+  color: var(--text);
+  font-weight: bold;
+}
+
+.touch-sub {
+  font-size: calc(10 * var(--px));
+  color: var(--text-dim);
+  line-height: 1;
+}
+
+/* Prevent text selection and gestures on playfield, canvas, controls */
+.cabinet,
+.playarea,
+.well,
+.pixel-canvas,
+.touch-controls,
+.touch-btn {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Small screen mobile portrait adjustments */
+@media (max-width: 400px) {
+  .cabinet {
+    padding: calc(4 * var(--px));
+    gap: calc(4 * var(--px));
+  }
+  .playarea {
+    gap: calc(4 * var(--px));
+  }
+  .panel {
+    width: calc(84 * var(--px));
+    gap: calc(4 * var(--px));
+  }
+  .box {
+    padding: calc(2 * var(--px));
+  }
+  .well {
+    padding: calc(4 * var(--px));
+  }
+  .touch-dpad {
+    grid-template-columns: repeat(3, calc(34 * var(--px)));
+    grid-template-rows: repeat(3, calc(34 * var(--px)));
+  }
+  .touch-btn--action {
+    width: calc(44 * var(--px));
+    height: calc(44 * var(--px));
+  }
+  .touch-btn--pill {
+    width: calc(56 * var(--px));
+    height: calc(24 * var(--px));
+    font-size: calc(6 * var(--px));
+  }
+}
+
+/* Landscape responsive layout: controls beside the well on mobile */
+@media (pointer: coarse) and (orientation: landscape), (max-height: 520px) and (min-width: 520px) {
+  .cabinet {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: calc(8 * var(--px));
+    padding: calc(4 * var(--px));
+  }
+
+  .marquee {
+    width: 100%;
+    padding: calc(2 * var(--px)) 0;
+  }
+
+  .logo {
+    font-size: calc(12 * var(--px));
+  }
+
+  .playarea {
+    order: 2;
+  }
+
+  .touch-controls {
+    display: contents; /* Allows child groups to position beside playarea */
+  }
+
+  .touch-dpad {
+    order: 1;
+  }
+
+  .touch-actions-group {
+    order: 3;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(10 * var(--px));
+  }
+
+  .touch-utility {
+    flex-direction: row;
+    gap: calc(8 * var(--px));
+  }
+
+  .controls-help {
+    width: 100%;
+    order: 4;
+  }
+}
+
+/* Hide desktop keyboard hints on touch devices while keeping sound/music toggles visible */
+@media (pointer: coarse) {
+  .controls-help__kbd {
+    display: none;
+  }
+  .controls-help__kbd-hint {
+    display: none;
+  }
+}
+.has-touch .controls-help__kbd {
+  display: none;
+}
+.has-touch .controls-help__kbd-hint {
+  display: none;
 }
 
 /* ---------- Footer controls help ---------- */

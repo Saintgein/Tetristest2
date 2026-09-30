@@ -470,8 +470,36 @@ all earlier suites still pass: 21, 21, 13, 13, 6).
 
 ---
 
+## Milestone 7 — Mobile responsive scaling & on-screen virtual touch controls ✅
+
+Goal: full mobile phone responsive scaling and on-screen virtual touch controls.
+
+**Files:** `index.html`, `style.css`, `src/input.js`, `src/main.js`, `package.json`,
+`tests/input.test.js`, `tests/browser-test.html`, `tests/run-browser-tests.js`, `README.md`
+
+Verified with `npm test` (357 unit tests, 100% green) and `npm run test:browser` (24/24 headless Firefox checks passing with zero console errors/warnings).
+
+- [x] Viewport meta tag: `width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover`
+- [x] Prevent default browser gestures: `touch-action: none`, `-webkit-touch-callout: none`,
+      `-webkit-user-select: none`, `user-select: none` across game areas and buttons
+- [x] Suppress long-press context menus on touch areas via `-webkit-touch-callout: none` and `contextmenu` preventDefault
+- [x] Clean playfield canvas pixelated scaling (`image-rendering: pixelated; image-rendering: crisp-edges`),
+      with responsive layout accommodating touch controls below the well (portrait) or beside the well (landscape)
+- [x] Virtual touch controls shown on coarse pointer / touch detection (`@media (pointer: coarse)` and `.has-touch`)
+- [x] D-Pad / Directional layout: Left, Right, Down (Soft Drop), Up (Hard Drop)
+- [x] Action buttons: A (Rotate Clockwise), B (Rotate Counter-Clockwise)
+- [x] Utility controls: HOLD and PAUSE
+- [x] Pointer Events (`pointerdown`, `pointerup`, `pointercancel`, `pointerleave`) with `setPointerCapture`
+      for robust multi-touch (e.g. holding Left while tapping Rotate)
+- [x] Zero allocations during gameplay touch handling: map button states directly into the existing input tick without allocating objects
+- [x] Reliable AudioContext unlock on first touch across iOS Safari and Android Chrome via `touchstart`, `touchend`, `pointerdown`
+- [x] 12 new unit tests for touch input translation and multi-touch states (357 tests total)
+- [x] Automated headless browser verification suite (`npm run test:browser`) verifying responsive layouts, multi-touch, audio unlock, and clean console
+
+---
+
 ## Backlog (post-1.0, not scheduled)
 
-- Gamepad API support · touch controls · T-spin & back-to-back scoring ·
-  configurable DAS/ARR in a settings menu · statistics screen (piece counts,
-  NES-style) · game-over "stack fills gray" animation · a second music track
+- Gamepad API support · T-spin & back-to-back scoring · configurable DAS/ARR in a
+  settings menu · statistics screen (piece counts, NES-style) · game-over "stack fills
+  gray" animation · a second music track

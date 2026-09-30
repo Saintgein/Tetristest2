@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <title>TETRIS</title>
 
@@ -65,15 +65,53 @@ OR CLICK TO START</p>
       </aside>
     </main>
 
+    <nav class="touch-controls" id="touch-controls" aria-label="Touch controls">
+      <div class="touch-dpad" id="touch-dpad" aria-label="Directional controls">
+        <button type="button" class="touch-btn touch-btn--up" data-action="hardDrop" aria-label="Hard drop">
+          <span class="touch-icon" aria-hidden="true">&#9650;</span>
+          <span class="touch-label">DROP</span>
+        </button>
+        <button type="button" class="touch-btn touch-btn--left" data-action="left" aria-label="Move left">
+          <span class="touch-icon" aria-hidden="true">&#9664;</span>
+        </button>
+        <div class="touch-dpad-center" aria-hidden="true"></div>
+        <button type="button" class="touch-btn touch-btn--right" data-action="right" aria-label="Move right">
+          <span class="touch-icon" aria-hidden="true">&#9654;</span>
+        </button>
+        <button type="button" class="touch-btn touch-btn--down" data-action="softDrop" aria-label="Soft drop">
+          <span class="touch-icon" aria-hidden="true">&#9660;</span>
+          <span class="touch-label">DOWN</span>
+        </button>
+      </div>
+
+      <div class="touch-actions-group" id="touch-actions-group">
+        <div class="touch-utility" id="touch-utility" aria-label="Game utility controls">
+          <button type="button" class="touch-btn touch-btn--pill" data-action="hold" aria-label="Hold piece">HOLD</button>
+          <button type="button" class="touch-btn touch-btn--pill" data-action="pause" aria-label="Pause game">PAUSE</button>
+        </div>
+
+        <div class="touch-actions" id="touch-actions" aria-label="Action controls">
+          <button type="button" class="touch-btn touch-btn--action touch-btn--b" data-action="rotateCCW" aria-label="Rotate counter-clockwise">
+            <span class="touch-letter">B</span>
+            <span class="touch-sub">&#8634;</span>
+          </button>
+          <button type="button" class="touch-btn touch-btn--action touch-btn--a" data-action="rotateCW" aria-label="Rotate clockwise">
+            <span class="touch-letter">A</span>
+            <span class="touch-sub">&#8635;</span>
+          </button>
+        </div>
+      </div>
+    </nav>
+
     <footer class="controls-help">
       <ul>
-        <li><kbd>ARROWS</kbd>/<kbd>WASD</kbd> MOVE</li>
-        <li><kbd>UP</kbd>/<kbd>X</kbd> ROTATE</li>
-        <li><kbd>SPACE</kbd> DROP</li>
-        <li><kbd>C</kbd> HOLD</li>
-        <li><kbd>P</kbd> PAUSE</li>
-        <li><kbd>M</kbd> <button type="button" class="hud-toggle" id="hud-sound" aria-pressed="true">SOUND: ON</button></li>
-        <li><kbd>B</kbd> <button type="button" class="hud-toggle" id="hud-music" aria-pressed="true">MUSIC: ON</button></li>
+        <li class="controls-help__kbd"><kbd>ARROWS</kbd>/<kbd>WASD</kbd> MOVE</li>
+        <li class="controls-help__kbd"><kbd>UP</kbd>/<kbd>X</kbd> ROTATE</li>
+        <li class="controls-help__kbd"><kbd>SPACE</kbd> DROP</li>
+        <li class="controls-help__kbd"><kbd>C</kbd> HOLD</li>
+        <li class="controls-help__kbd"><kbd>P</kbd> PAUSE</li>
+        <li><kbd class="controls-help__kbd-hint">M</kbd> <button type="button" class="hud-toggle" id="hud-sound" aria-pressed="true">SOUND: ON</button></li>
+        <li><kbd class="controls-help__kbd-hint">B</kbd> <button type="button" class="hud-toggle" id="hud-music" aria-pressed="true">MUSIC: ON</button></li>
       </ul>
     </footer>
   </div>

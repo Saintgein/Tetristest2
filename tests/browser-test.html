@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Browser Verification Suite</title>
+  <style>
+    body { font-family: monospace; background: #111; color: #eee; padding: 20px; }
+    iframe { border: 1px solid #444; margin-bottom: 20px; display: block; }
+    .pass { color: #0f0; }
+    .fail { color: #f00; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Tetris Headless Browser Verification Suite</h1>
+  <div id="results">Running tests...</div>
+
+  <iframe id="frame-portrait" width="375" height="667" src="/index.html?debug&touch"></iframe>
+  <iframe id="frame-landscape" width="667" height="375" src="/index.html?debug&touch"></iframe>
+  <iframe id="frame-desktop" width="800" height="600" src="/index.html?debug"></iframe>
+
+  <script type="module">
+    const tests = [];
+    const errors = [];
+    window.addEventListener('error', (e) => errors.push(e.message || String(e)));
+
+    function check(name, pass, detail = '') {
+      tests.push({ name, pass: Boolean(pass), detail });
+    }
+
+    function wait(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    function waitForFrame(iframe) {
+      return new Promise((resolve) => {
+        if (iframe.contentDocument?.readyState === 'complete' && iframe.contentWindow?.__game) {
+          resolve();
+        } else {
+          iframe.addEventListener('load', () => {
+            // Give bootstrap a tick to settle fonts & layout
+            setTimeout(resolve, 300);
+          });
+        }
+      });
+    }
+
+    async function run() {
+      const pFrame = document.getElementById('frame-portrait');
+      const lFrame = document.getElementById('frame-landscape');
+      const dFrame = document.getElementById('frame-desktop');
+
+      await Promise.all([waitForFrame(pFrame), waitForFrame(lFrame), waitForFrame(dFrame)]);
+      // Extra delay for scaling to settle
+      await wait(500);
+
+      const pDoc = pFrame.contentDocument;
+      const pWin = pFrame.contentWindow;
+
+      // 1. Viewport & Responsive Styling
+      const metaViewport = pDoc.querySelector('meta[name="viewport"]');
+      const vpContent = metaViewport ? metaViewport.getAttribute('content') : '';
+      check('viewport meta tag has device-width, no user-scalable, cover',
+        vpContent.includes('width=device-width') &&
+        vpContent.includes('user-scalable=no') &&
+        vpContent.includes('viewport-fit=cover'),
+        `Content: ${vpContent}`
+      );
+
+      const bodyStyle = pWin.getComputedStyle(pDoc.body);
+      check('body touch-action is none', bodyStyle.touchAction === 'none', `touchAction: ${bodyStyle.touchAction}`);
+
+      const canvas = pDoc.getElementById('board-canvas');
+      const canvasStyle = pWin.getComputedStyle(canvas);
+      check('canvas image-rendering is pixelated or crisp-edges',
+        canvasStyle.imageRendering === 'pixelated' || canvasStyle.imageRendering === 'crisp-edges',
+        `imageRendering: ${canvasStyle.imageRendering}`
+      );
+
+      // 2. Virtual Touch Controls in Mobile Portrait
+      const touchControls = pDoc.getElementById('touch-controls');
+      const tcStyle = pWin.getComputedStyle(touchControls);
+      check('touch controls visible in mobile portrait with touch',
+        tcStyle.display !== 'none',
+        `display: ${tcStyle.display}`
+      );
+
+      const dpad = pDoc.getElementById('touch-dpad');
+      const btnUp = pDoc.querySelector('.touch-btn--up');
+      const btnDown = pDoc.querySelector('.touch-btn--down');
+      const btnLeft = pDoc.querySelector('.touch-btn--left');
+      const btnRight = pDoc.querySelector('.touch-btn--right');
+      check('dpad buttons exist with correct actions',
+        btnUp?.dataset.action === 'hardDrop' &&
+        btnDown?.dataset.action === 'softDrop' &&
+        btnLeft?.dataset.action === 'left' &&
+        btnRight?.dataset.action === 'right'
+      );
+
+      const btnA = pDoc.querySelector('.touch-btn--a');
+      const btnB = pDoc.querySelector('.touch-btn--b');
+      check('action buttons exist (A: rotateCW, B: rotateCCW)',
+        btnA?.dataset.action === 'rotateCW' && btnB?.dataset.action === 'rotateCCW'
+      );
+
+      const btnHold = pDoc.querySelector('[data-action="hold"]');
+      const btnPause = pDoc.querySelector('[data-action="pause"]');
+      check('utility buttons exist (HOLD and PAUSE)',
+        btnHold?.dataset.action === 'hold' && btnPause?.dataset.action === 'pause'
+      );
+
+      // Portrait layout check: touch controls are below the well
+      const well = pDoc.getElementById('well');
+      const wellRect = well.getBoundingClientRect();
+      const tcRect = touchControls.getBoundingClientRect();
+      check('portrait layout: touch controls are below the well',
+        tcRect.top >= wellRect.bottom - 10,
+        `tc.top: ${tcRect.top}, well.bottom: ${wellRect.bottom}`
+      );
+
+      // 3. Multi-Touch Pointer Events & Translation
+      const input = pWin.__input;
+      check('input instance available via ?debug', Boolean(input));
+
+      // Tap Left
+      btnLeft.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', bubbles: true }));
+      btnLeft.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'touch', bubbles: true }));
+      let poll = input.poll();
+      check('touch Left tap triggers shift -1', poll.shift === -1);
+
+      // Tap Rotate A
+      btnA.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', bubbles: true }));
+      btnA.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'touch', bubbles: true }));
+      poll = input.poll();
+      check('touch Rotate A tap triggers rotate 1', poll.rotate === 1);
+
+      // Multi-touch: Hold Left while tapping Rotate A
+      btnLeft.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'touch', bubbles: true }));
+      poll = input.poll();
+      check('multi-touch: Left pressed initially', poll.shift === -1);
+
+      btnA.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, pointerType: 'touch', bubbles: true }));
+      poll = input.poll();
+      check('multi-touch: A tapped while Left held triggers rotate', poll.rotate === 1);
+      check('multi-touch: Left button remains pressed while tapping A', btnLeft.classList.contains('is-pressed'));
+
+      btnA.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, pointerType: 'touch', bubbles: true }));
+      check('multi-touch: releasing A keeps Left held', btnLeft.classList.contains('is-pressed'));
+
+      btnLeft.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'touch', bubbles: true }));
+      check('multi-touch: releasing Left clears pressed class', !btnLeft.classList.contains('is-pressed'));
+
+      // 4. Landscape Layout Check
+      const lDoc = lFrame.contentDocument;
+      const lWin = lFrame.contentWindow;
+      const lWell = lDoc.getElementById('well');
+      const lDpad = lDoc.getElementById('touch-dpad');
+      const lActions = lDoc.getElementById('touch-actions-group');
+
+      const lwRect = lWell.getBoundingClientRect();
+      const ldRect = lDpad.getBoundingClientRect();
+      const laRect = lActions.getBoundingClientRect();
+
+      check('landscape layout: D-Pad is to the left of the well',
+        ldRect.right <= lwRect.left + 50,
+        `dpad.right: ${ldRect.right}, well.left: ${lwRect.left}`
+      );
+      check('landscape layout: actions are to the right of the well',
+        laRect.left >= lwRect.right - 50,
+        `actions.left: ${laRect.left}, well.right: ${lwRect.right}`
+      );
+
+      // 5. Desktop Layout Check (touch controls hidden on non-touch desktop)
+      const dDoc = dFrame.contentDocument;
+      const dWin = dFrame.contentWindow;
+      const dTouchControls = dDoc.getElementById('touch-controls');
+      const dTcStyle = dWin.getComputedStyle(dTouchControls);
+      check('desktop: touch controls hidden by default',
+        dTcStyle.display === 'none',
+        `display: ${dTcStyle.display}`
+      );
+
+      // 6. Audio Unlock & Start Flow
+      const audio = pWin.__audio;
+      check('audio instance exists', Boolean(audio));
+      // Dispatch touchstart on window to unlock audio
+      pWin.dispatchEvent(new Event('touchstart'));
+      check('audio ready after touch gesture', audio.ready === true);
+
+      // Title screen start via tap on overlay
+      const game = pWin.__game;
+      check('game is in title phase initially', game.getState().phase === 'title');
+      const overlay = pDoc.getElementById('overlay');
+      overlay.dispatchEvent(new PointerEvent('pointerdown', { isPrimary: true, pointerType: 'touch', bubbles: true }));
+      // Advance a frame or poll
+      poll = input.poll();
+      check('touch on title screen triggers start', poll.start === true);
+
+      // 7. Console Cleanliness
+      check('console has zero unhandled errors', errors.length === 0, errors.join(', '));
+
+      // Display results in HTML
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = tests.map((t) =>
+        `<div class="${t.pass ? 'pass' : 'fail'}">${t.pass ? '✓' : '✗'} ${t.name} ${t.detail ? `(${t.detail})` : ''}</div>`
+      ).join('');
+
+      // Post report back to test server
+      await fetch('/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tests, errors }),
+      });
+    }
+
+    run().catch(async (err) => {
+      errors.push(err.stack || err.message);
+      await fetch('/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tests, errors }),
+      });
+    });
+  </script>
+</body>
+</html>

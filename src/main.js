@@ -35,6 +35,10 @@ function fitScale() {
     Math.floor(Math.min(window.innerWidth / logicalW, window.innerHeight / logicalH)),
   ));
   if (scale !== current) root.style.setProperty('--scale', String(scale));
+
+  // If viewport is smaller than minimum scale 1 (e.g. 320px screen), scale down cleanly
+  const fitFactor = Math.min(1, window.innerWidth / (logicalW * scale), window.innerHeight / (logicalH * scale));
+  cabinet.style.transform = fitFactor < 1 ? `scale(${fitFactor})` : '';
 }
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -56,16 +60,41 @@ const applyMotionClass = () => root.classList.toggle('reduced-motion', reducedMo
 applyMotionClass();
 motionQuery?.addEventListener?.('change', applyMotionClass);
 
+// Touch device detection: coarse pointer, maxTouchPoints, ontouchstart, or forced with ?touch
+const hasTouch = () =>
+  params.has('touch') ||
+  Boolean(window.matchMedia?.('(pointer: coarse)')?.matches) ||
+  ('ontouchstart' in window) ||
+  (Number(navigator.maxTouchPoints) > 0);
+
+if (hasTouch()) {
+  root.classList.add('has-touch');
+}
+window.addEventListener('touchstart', () => root.classList.add('has-touch'), { once: true, passive: true });
+
+// Suppress long-press context menus on touch areas
+window.addEventListener('contextmenu', (e) => {
+  if (e.target?.closest?.('.cabinet, .touch-controls, .touch-btn, .well, .pixel-canvas')) {
+    e.preventDefault();
+  }
+}, { capture: true, passive: false });
+
 const audio = createAudio();
 // Browsers only start audio from a user gesture; unlock() is cheap, idempotent and never
-// throws (a blocked AudioContext just means silence). Capture phase: nothing on the page
-// can stop the gesture from reaching it.
+// throws (a blocked AudioContext just means silence). Listening on touchstart, touchend,
+// pointerdown, and keydown ensures reliable unlock across iOS Safari and Android Chrome.
 const unlockAudio = () => audio.unlock();
 window.addEventListener('keydown', unlockAudio, { capture: true });
 window.addEventListener('pointerdown', unlockAudio, { capture: true });
+window.addEventListener('touchstart', unlockAudio, { capture: true, passive: true });
+window.addEventListener('touchend', unlockAudio, { capture: true, passive: true });
+
+const input = createInput(window, undefined, undefined, {
+  touchRoot: $('touch-controls'),
+});
 
 const game = createGame({
-  input: createInput(window),
+  input,
   renderer: createRenderer({
     boardCanvas: $('board-canvas'),
     holdCanvas: $('hold-canvas'),
@@ -89,6 +118,15 @@ const game = createGame({
   initialState: createInitialState({ startLevel }),
 });
 
+// Title screen start via touch controls (PAUSE or A starts the game)
+$('touch-controls')?.addEventListener?.('pointerdown', (e) => {
+  unlockAudio();
+  const action = e.target?.closest?.('[data-action]')?.getAttribute('data-action');
+  if ((action === 'pause' || action === 'rotateCW') && game.getState().phase === 'title') {
+    input.press('start');
+  }
+}, { capture: true });
+
 game.start();
 
 // Footer toggles (same as M / B). pointerdown is cancelled so the buttons never take
@@ -100,7 +138,7 @@ for (const [id, toggle] of [['hud-sound', () => game.toggleMute()], ['hud-music'
 }
 
 // QA aid: ?debug exposes the game and audio for scripted browser tests.
-if (params.has('debug')) Object.assign(window, { __game: game, __audio: audio });
+if (params.has('debug')) Object.assign(window, { __game: game, __audio: audio, __input: input });
 
 // Auto-pause when the player leaves: tab hidden, window minimized or unfocused.
 document.addEventListener('visibilitychange', () => {
@@ -110,5 +148,6 @@ window.addEventListener('blur', () => game.pause());
 
 fitScale();
 window.addEventListener('resize', fitScale);
+window.addEventListener('orientationchange', fitScale);
 // Web font metrics change the cabinet size once loaded
 document.fonts?.ready.then(fitScale);

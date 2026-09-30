@@ -44,21 +44,25 @@ to a monospace font.
 
 ## Controls
 
-| Action | Keys |
-|---|---|
-| Move | ← → or A D (hold to auto-repeat) |
-| Soft drop | ↓ or S |
-| Hard drop | Space |
-| Rotate clockwise | ↑, X or W |
-| Rotate counter-clockwise | Z |
-| Hold | C or Shift |
-| Pause / resume | P or Esc (also pauses automatically when the tab loses focus) |
-| All sound on / off | M (or click SOUND in the footer) |
-| Music on / off | B (or click MUSIC in the footer) |
-| Start / continue | Enter (main or numpad), or click / tap anywhere |
-| Choose start level (title screen) | ← → (0–19) |
+| Action | Keys | Touch Controls |
+|---|---|---|
+| Move | ← → or A D (hold to auto-repeat) | D-Pad ◀ ▶ |
+| Soft drop | ↓ or S | D-Pad ▼ (DOWN) |
+| Hard drop | Space | D-Pad ▲ (DROP) |
+| Rotate clockwise | ↑, X or W | Button A |
+| Rotate counter-clockwise | Z | Button B |
+| Hold | C or Shift | HOLD button |
+| Pause / resume | P or Esc (also pauses on blur) | PAUSE button |
+| All sound on / off | M (or click SOUND in the footer) | SOUND toggle |
+| Music on / off | B (or click MUSIC in the footer) | MUSIC toggle |
+| Start / continue | Enter, or click / tap anywhere | Tap overlay, well, or PAUSE/A |
+| Choose start level (title screen) | ← → (0–19) | D-Pad ◀ ▶ |
 
-Sound starts after your first keypress or click, because browsers block audio
+On mobile and touch devices, on-screen virtual touch controls appear automatically
+with full multi-touch support (`pointerdown` with `setPointerCapture`), zero-allocation
+input ticks, and responsive placement below the well (portrait) or beside the well (landscape).
+
+Sound starts after your first keypress, tap or click, because browsers block audio
 until the page gets a user gesture. If the browser refuses audio entirely, the
 game still plays, just silently.
 
@@ -69,17 +73,17 @@ focuses it and starts the game.
 ## Testing
 
 ```sh
-npm test        # node --test; no dependencies. Node.js 20+ (developed on 22)
+npm test              # node --test; 357 unit tests (no dependencies)
+npm run test:browser  # headless Firefox browser verification suite
 ```
 
-About 320 tests cover the pure game logic, and the browser-facing modules are
-tested against small fakes:
+About 357 tests cover the pure game logic, touch controls, and browser-facing modules:
 
 | Suite | What it covers |
 |---|---|
 | `pieces` / `board` | SRS shapes and kicks, 7-bag, collision, line clears |
 | `progression` | gravity table and accumulator timing for every level, lock delay, scoring, levels |
-| `input` | DAS/ARR frame schedule, key aliases, taps between frames |
+| `input` | DAS/ARR frame schedule, key aliases, taps, multi-touch virtual controls, pointer capture |
 | `game` | every rule frame by frame: gravity, lock delay, hold, ARE, line-clear phase, pause, game over, persistence, the fixed-timestep loop |
 | `renderer` | real pixel colours on a fake canvas (`tests/helpers/fake-canvas.js`): bevels, ghost, previews, clear animation |
 | `ui` | HUD formatting, overlay screens, level-up flash |
@@ -93,7 +97,8 @@ tested against small fakes:
 |---|---|
 | `?level=N` | start at level 0–99 (the menu offers 0–19) |
 | `?reducedMotion` | force reduced motion |
-| `?debug` | expose `window.__game` and `window.__audio` for scripted browser tests |
+| `?touch` | force touch controls display on desktop |
+| `?debug` | expose `window.__game`, `window.__audio`, `window.__input` for scripted browser tests |
 
 ## Architecture
 
