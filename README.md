@@ -44,25 +44,32 @@ to a monospace font.
 
 ## Controls
 
-| Action | Keys | Touch Controls |
-|---|---|---|
-| Move | ← → or A D (hold to auto-repeat) | D-Pad ◀ ▶ |
-| Soft drop | ↓ or S | D-Pad ▼ (DOWN) |
-| Hard drop | Space | D-Pad ▲ (DROP) |
-| Rotate clockwise | ↑, X or W | Button A |
-| Rotate counter-clockwise | Z | Button B |
-| Hold | C or Shift | HOLD button |
-| Pause / resume | P or Esc (also pauses on blur) | PAUSE button |
-| All sound on / off | M (or click SOUND in the footer) | SOUND toggle |
-| Music on / off | B (or click MUSIC in the footer) | MUSIC toggle |
-| Start / continue | Enter, or click / tap anywhere | Tap overlay, well, or PAUSE/A |
-| Choose start level (title screen) | ← → (0–19) | D-Pad ◀ ▶ |
+| Action | Keys | Touch Controls | Gamepad / Controller |
+|---|---|---|---|
+| Move | ← → or A D (hold to auto-repeat) | D-Pad ◀ ▶ | D-Pad ◀ ▶ or Left Stick X |
+| Soft drop | ↓ or S | D-Pad ▼ (DOWN) | D-Pad ▼ or Left Stick Y |
+| Hard drop | Space | D-Pad ▲ (DROP) | D-Pad ▲ (Up) |
+| Rotate clockwise | ↑, X or W | Button A | Button 0 (A / Cross) or Button 3 (Y / Triangle) |
+| Rotate counter-clockwise | Z | Button B | Button 1 (B / Circle) or Button 2 (X / Square) |
+| Hold | C or Shift | HOLD button | Bumpers (LB / RB) or Triggers (LT / RT) |
+| Pause / resume | P or Esc (also pauses on blur) | PAUSE button | Start / Options (Button 9) |
+| All sound on / off | M (or click SOUND in the footer) | SOUND toggle | — |
+| Music on / off | B (or click MUSIC in the footer) | MUSIC toggle | — |
+| Start / continue | Enter, or click / tap anywhere | Tap overlay, well, or PAUSE/A | Start (Button 9) or Button 0 (A) |
+| Choose start level (title screen) | ← → (0–19) | D-Pad ◀ ▶ | D-Pad ◀ ▶ or Left Stick X |
+
+Native **Gamepad API** controller support is active automatically:
+- Plug-and-play standard mapping (Xbox, PlayStation, Nintendo, and generic USB/Bluetooth controllers).
+- Standard 0.5 deadzone filtering on analog stick axes.
+- Zero heap allocations per frame during polling ticks.
+- Dynamic title prompt cues ("PRESS ENTER, TAP OR PRESS START") on controller connection.
+- Controller button presses automatically unlock Web Audio.
 
 On mobile and touch devices, on-screen virtual touch controls appear automatically
 with full multi-touch support (`pointerdown` with `setPointerCapture`), zero-allocation
 input ticks, and responsive placement below the well (portrait) or beside the well (landscape).
 
-Sound starts after your first keypress, tap or click, because browsers block audio
+Sound starts after your first keypress, controller button press, tap or click, because browsers block audio
 until the page gets a user gesture. If the browser refuses audio entirely, the
 game still plays, just silently.
 
@@ -73,11 +80,11 @@ focuses it and starts the game.
 ## Testing
 
 ```sh
-npm test              # node --test; 357 unit tests (no dependencies)
-npm run test:browser  # headless Firefox browser verification suite
+npm test              # node --test; 376 unit tests (no dependencies)
+npm run test:browser  # headless Firefox browser verification suite (29 tests)
 ```
 
-About 357 tests cover the pure game logic, touch controls, and browser-facing modules:
+About 376 tests cover the pure game logic, touch controls, gamepad API, and browser-facing modules:
 
 | Suite | What it covers |
 |---|---|

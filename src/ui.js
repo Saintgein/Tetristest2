@@ -13,6 +13,7 @@ const pad = (value, digits) => String(value).padStart(digits, '0');
  * into two lines that do (the overlay uses white-space: pre-line).
  */
 export const TITLE_PROMPT = 'PRESS ENTER\nOR CLICK TO START';
+export const TITLE_PROMPT_GAMEPAD = 'PRESS ENTER, TAP\nOR PRESS START';
 
 /** Level selector with arrows only where another level is available: "< 05 >". */
 function levelSelector(level) {
@@ -22,10 +23,15 @@ function levelSelector(level) {
 }
 
 /** @returns {{ title: string, info: string|null, sub: string } | null} overlay content, null = hidden */
-export function overlayContent(state) {
+export function overlayContent(state, options = false) {
+  const hasGamepad = typeof options === 'boolean' ? options : Boolean(options?.hasGamepad);
   switch (state.phase) {
     case 'title':
-      return { title: 'TETRIS', info: levelSelector(state.startLevel), sub: TITLE_PROMPT };
+      return {
+        title: 'TETRIS',
+        info: levelSelector(state.startLevel),
+        sub: hasGamepad ? TITLE_PROMPT_GAMEPAD : TITLE_PROMPT,
+      };
     case 'paused':
       return { title: 'PAUSED', info: null, sub: 'PRESS P TO RESUME' };
     case 'gameOver':
@@ -45,8 +51,10 @@ export const isLevelUpFlashOn = (state) => state.levelUpFlash > 0 && Math.floor(
 
 /**
  * @param {{ score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo?, well? }} elements
- * @param {{ reducedMotion?: () => boolean }} [options] reduced motion disables the level-up flash
- * @returns {{ update(state: object): void, setMuted(muted: boolean): void }}
+ * @param {{ reducedMotion?: () => boolean, hasGamepad?: () => boolean }} [options]
+ *        reducedMotion: disables the level-up flash;
+ *        hasGamepad: indicates if a gamepad is currently connected
+ * @returns {{ update(state: object): void, setMuted(muted: boolean): void, setMusic(on: boolean): void }}
  *
  * update() runs every frame and must not allocate during play, so numbers are
  * compared before they're formatted and overlay content is only built for the
@@ -54,7 +62,7 @@ export const isLevelUpFlashOn = (state) => state.levelUpFlash > 0 && Math.floor(
  */
 export function createUI(
   { score, hiScore, level, lines, overlay, overlayTitle, overlaySub, overlayInfo, well, sound, music },
-  { reducedMotion = () => false } = {},
+  { reducedMotion = () => false, hasGamepad = () => false } = {},
 ) {
   const shownNumbers = new Map();              // element → last number shown
   const shownText = new Map();                 // element → last text written
@@ -89,7 +97,7 @@ export function createUI(
       setNumber(level, state.level, 2);
       setNumber(lines, state.lines, 3);
 
-      const screen = overlayContent(state);
+      const screen = overlayContent(state, hasGamepad());
       const hidden = screen === null;
       if (hidden !== overlayHidden) { overlay.hidden = hidden; overlayHidden = hidden; }
       if (screen) {

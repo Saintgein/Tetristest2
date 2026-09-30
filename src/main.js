@@ -82,15 +82,52 @@ window.addEventListener('contextmenu', (e) => {
 const audio = createAudio();
 // Browsers only start audio from a user gesture; unlock() is cheap, idempotent and never
 // throws (a blocked AudioContext just means silence). Listening on touchstart, touchend,
-// pointerdown, and keydown ensures reliable unlock across iOS Safari and Android Chrome.
+// pointerdown, keydown, and gamepad button presses ensures reliable unlock across all devices.
 const unlockAudio = () => audio.unlock();
 window.addEventListener('keydown', unlockAudio, { capture: true });
 window.addEventListener('pointerdown', unlockAudio, { capture: true });
 window.addEventListener('touchstart', unlockAudio, { capture: true, passive: true });
 window.addEventListener('touchend', unlockAudio, { capture: true, passive: true });
 
+// Gamepad detection and connection lifecycle
+let connectedGamepads = 0;
+function countGamepads() {
+  if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return 0;
+  try {
+    const list = navigator.getGamepads();
+    if (!list) return 0;
+    let count = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i].connected !== false) count++;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+const hasGamepad = () => connectedGamepads > 0 || countGamepads() > 0;
+
+window.addEventListener('gamepadconnected', () => {
+  connectedGamepads++;
+  root.classList.add('has-gamepad');
+  unlockAudio();
+});
+
+window.addEventListener('gamepaddisconnected', () => {
+  connectedGamepads = Math.max(0, connectedGamepads - 1);
+  if (!hasGamepad()) {
+    root.classList.remove('has-gamepad');
+  }
+});
+
+if (hasGamepad()) {
+  root.classList.add('has-gamepad');
+}
+
 const input = createInput(window, undefined, undefined, {
   touchRoot: $('touch-controls'),
+  onGamepadButton: unlockAudio,
 });
 
 const game = createGame({
@@ -112,7 +149,7 @@ const game = createGame({
     well: $('well'),
     sound: $('hud-sound'),
     music: $('hud-music'),
-  }, { reducedMotion }),
+  }, { reducedMotion, hasGamepad }),
   audio,
   storage,
   initialState: createInitialState({ startLevel }),

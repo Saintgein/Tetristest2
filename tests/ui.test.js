@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createUI, overlayContent, isLevelUpFlashOn, TITLE_PROMPT } from '../src/ui.js';
+import { createUI, overlayContent, isLevelUpFlashOn, TITLE_PROMPT, TITLE_PROMPT_GAMEPAD } from '../src/ui.js';
 import { GAME_OVER_DELAY_FRAMES, LEVEL_UP_FLASH_FRAMES, MAX_START_LEVEL } from '../src/config.js';
 
 /** Minimal stand-in for a DOM element that counts text writes. */
@@ -242,4 +242,42 @@ test('toggles are optional: no elements, no errors', () => {
 test('title prompt: "PRESS ENTER OR CLICK TO START", on two lines that fit the well', () => {
   assert.equal(TITLE_PROMPT.replace('\n', ' '), 'PRESS ENTER OR CLICK TO START');
   assert.equal(TITLE_PROMPT.split('\n').length, 2);
+});
+
+test('gamepad prompt: "PRESS ENTER, TAP OR PRESS START", on two lines fitting the 160px well', () => {
+  assert.equal(TITLE_PROMPT_GAMEPAD.replace('\n', ' '), 'PRESS ENTER, TAP OR PRESS START');
+  const lines = TITLE_PROMPT_GAMEPAD.split('\n');
+  assert.equal(lines.length, 2);
+  for (const line of lines) {
+    assert.ok(line.length * 8 <= 160 - 2 * 6, `line "${line}" fits well`);
+  }
+});
+
+test('overlayContent: switches to TITLE_PROMPT_GAMEPAD when hasGamepad is active', () => {
+  const state = baseState({ phase: 'title' });
+  assert.equal(overlayContent(state, false).sub, TITLE_PROMPT);
+  assert.equal(overlayContent(state, true).sub, TITLE_PROMPT_GAMEPAD);
+  assert.equal(overlayContent(state, { hasGamepad: true }).sub, TITLE_PROMPT_GAMEPAD);
+  assert.equal(overlayContent(state, { hasGamepad: false }).sub, TITLE_PROMPT);
+});
+
+test('UI update: dynamically switches title prompt when controller connects/disconnects', () => {
+  let connected = false;
+  const els = {
+    score: fakeElement(), hiScore: fakeElement(), level: fakeElement(), lines: fakeElement(),
+    overlay: fakeElement(), overlayTitle: fakeElement(), overlaySub: fakeElement(),
+    overlayInfo: fakeElement(), well: fakeElement(),
+  };
+  const ui = createUI(els, { hasGamepad: () => connected });
+
+  ui.update(baseState({ phase: 'title' }));
+  assert.equal(els.overlaySub.textContent, TITLE_PROMPT);
+
+  connected = true;
+  ui.update(baseState({ phase: 'title' }));
+  assert.equal(els.overlaySub.textContent, TITLE_PROMPT_GAMEPAD);
+
+  connected = false;
+  ui.update(baseState({ phase: 'title' }));
+  assert.equal(els.overlaySub.textContent, TITLE_PROMPT);
 });

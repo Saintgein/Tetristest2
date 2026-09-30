@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyActions, createDasState, stepDas, createInput } from '../src/input.js';
+import { emptyActions, createDasState, stepDas, createInput, GP_AXIS_DEADZONE } from '../src/input.js';
 import { DAS_FRAMES, ARR_FRAMES } from '../src/config.js';
 
 // ---------- helpers ----------
@@ -721,4 +721,343 @@ test('touch: zero allocations - poll() reuses preallocated actions object', () =
   root.buttons[1].emit('pointerdown', touchPointer(2));
   const a3 = input.poll();
   assert.equal(a2, a3, 'poll() reuses the preallocated Actions instance with multi-touch');
+});
+
+// ---------- Gamepad API Controller Support ----------
+
+function fakeGamepad({
+  connected = true,
+  axes = [0, 0, 0, 0],
+  buttons = [],
+} = {}) {
+  const btnObjs = [];
+  for (let i = 0; i < 17; i++) {
+    const b = buttons[i];
+    if (b !== undefined) {
+      if (typeof b === 'object' && b !== null) btnObjs.push({ pressed: b.pressed ?? false, value: b.value ?? 0 });
+      else if (typeof b === 'boolean') btnObjs.push({ pressed: b, value: b ? 1 : 0 });
+      else btnObjs.push({ pressed: b > 0.5, value: Number(b) });
+    } else {
+      btnObjs.push({ pressed: false, value: 0 });
+    }
+  }
+  return { connected, axes: [...axes], buttons: btnObjs };
+}
+
+test('gamepad: empty or null gamepads list returns default empty actions', () => {
+  let pads = [];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+  assert.deepEqual({ ...input.poll() }, emptyActions());
+
+  pads = null;
+  assert.deepEqual({ ...input.poll() }, emptyActions());
+
+  pads = [null, null, null, null];
+  assert.deepEqual({ ...input.poll() }, emptyActions());
+});
+
+test('gamepad: deadzone constant is 0.5', () => {
+  assert.equal(GP_AXIS_DEADZONE, 0.5);
+});
+
+test('gamepad: D-Pad Left and Right trigger horizontal shift and DAS/ARR repeats', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, { dasFrames: 10, arrFrames: 2 }, { getGamepads: () => pads });
+
+  // Hold D-Pad Left (Button 14) for 20 frames
+  pads = [fakeGamepad({ buttons: { 14: true } })];
+
+  const shifts = [];
+  for (let i = 0; i < 20; i++) {
+    const { shift } = input.poll();
+    if (shift !== 0) shifts.push([i, shift]);
+  }
+  // Frame 0: fresh shift (-1)
+  // Frames 1..9: charging DAS (10 frames)
+  // Frame 10: DAS fires (-1)
+  // Frames 12, 14, 16, 18: ARR repeats (-1)
+  assert.deepEqual(shifts, [[0, -1], [10, -1], [12, -1], [14, -1], [16, -1], [18, -1]]);
+
+  // Release D-Pad Left
+  pads = [fakeGamepad()];
+  assert.equal(input.poll().shift, 0);
+
+  // Tap D-Pad Right (Button 15)
+  pads = [fakeGamepad({ buttons: { 15: true } })];
+  assert.equal(input.poll().shift, 1);
+  pads = [fakeGamepad()];
+  assert.equal(input.poll().shift, 0);
+});
+
+test('gamepad: Left Stick X triggers horizontal shift and respects 0.5 deadzone', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, { dasFrames: 10, arrFrames: 2 }, { getGamepads: () => pads });
+
+  // Within deadzone (-0.49 and +0.49)
+  pads = [fakeGamepad({ axes: [-0.49, 0] })];
+  assert.equal(input.poll().shift, 0);
+
+  pads = [fakeGamepad({ axes: [0.49, 0] })];
+  assert.equal(input.poll().shift, 0);
+
+  // At/beyond deadzone threshold (-0.5): triggers Left
+  pads = [fakeGamepad({ axes: [-0.5, 0] })];
+  assert.equal(input.poll().shift, -1);
+
+  // Neutralize stick
+  pads = [fakeGamepad({ axes: [0, 0] })];
+  assert.equal(input.poll().shift, 0);
+
+  // At/beyond deadzone threshold (+0.5): triggers Right
+  pads = [fakeGamepad({ axes: [0.5, 0] })];
+  assert.equal(input.poll().shift, 1);
+});
+
+test('gamepad: D-Pad Down and Left Stick Y trigger Soft Drop while held', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // D-Pad Down (Button 13) held
+  pads = [fakeGamepad({ buttons: { 13: true } })];
+  assert.equal(input.poll().softDrop, true);
+  assert.equal(input.poll().softDrop, true);
+
+  // Released
+  pads = [fakeGamepad()];
+  assert.equal(input.poll().softDrop, false);
+
+  // Left Stick Y inside deadzone (< 0.5)
+  pads = [fakeGamepad({ axes: [0, 0.49] })];
+  assert.equal(input.poll().softDrop, false);
+
+  // Left Stick Y at threshold (0.5)
+  pads = [fakeGamepad({ axes: [0, 0.5] })];
+  assert.equal(input.poll().softDrop, true);
+
+  // Left Stick Y full down (1.0)
+  pads = [fakeGamepad({ axes: [0, 1.0] })];
+  assert.equal(input.poll().softDrop, true);
+
+  // Neutralize
+  pads = [fakeGamepad({ axes: [0, 0] })];
+  assert.equal(input.poll().softDrop, false);
+});
+
+test('gamepad: D-Pad Up triggers Hard Drop as single-frame edge', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // D-Pad Up (Button 12) pressed
+  pads = [fakeGamepad({ buttons: { 12: true } })];
+  assert.equal(input.poll().hardDrop, true, 'poll 0: edge detected');
+  assert.equal(input.poll().hardDrop, false, 'poll 1: held does not re-trigger');
+
+  // Released and re-pressed
+  pads = [fakeGamepad()];
+  input.poll();
+  pads = [fakeGamepad({ buttons: { 12: true } })];
+  assert.equal(input.poll().hardDrop, true, 'poll 3: fresh press triggers again');
+});
+
+test('gamepad: Buttons 0 and 3 trigger Rotate CW (A / Cross, Y / Triangle) as single-frame edges', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // Button 0 (A)
+  pads = [fakeGamepad({ buttons: { 0: true } })];
+  assert.equal(input.poll().rotate, 1);
+  assert.equal(input.poll().rotate, 0);
+
+  // Release
+  pads = [fakeGamepad()];
+  input.poll();
+
+  // Button 3 (Y)
+  pads = [fakeGamepad({ buttons: { 3: true } })];
+  assert.equal(input.poll().rotate, 1);
+  assert.equal(input.poll().rotate, 0);
+});
+
+test('gamepad: Buttons 1 and 2 trigger Rotate CCW (B / Circle, X / Square) as single-frame edges', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // Button 1 (B)
+  pads = [fakeGamepad({ buttons: { 1: true } })];
+  assert.equal(input.poll().rotate, -1);
+  assert.equal(input.poll().rotate, 0);
+
+  // Release
+  pads = [fakeGamepad()];
+  input.poll();
+
+  // Button 2 (X)
+  pads = [fakeGamepad({ buttons: { 2: true } })];
+  assert.equal(input.poll().rotate, -1);
+  assert.equal(input.poll().rotate, 0);
+});
+
+test('gamepad: Bumpers (4, 5) and Triggers (6, 7) trigger Hold as single-frame edge', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // Left Bumper (4)
+  pads = [fakeGamepad({ buttons: { 4: true } })];
+  assert.equal(input.poll().hold, true);
+  assert.equal(input.poll().hold, false);
+
+  // Release
+  pads = [fakeGamepad()];
+  input.poll();
+
+  // Right Bumper (5)
+  pads = [fakeGamepad({ buttons: { 5: true } })];
+  assert.equal(input.poll().hold, true);
+  assert.equal(input.poll().hold, false);
+
+  // Release
+  pads = [fakeGamepad()];
+  input.poll();
+
+  // Left Trigger (6) with analog value > 0.5
+  pads = [fakeGamepad({ buttons: { 6: { pressed: true, value: 0.8 } } })];
+  assert.equal(input.poll().hold, true);
+  assert.equal(input.poll().hold, false);
+
+  // Release
+  pads = [fakeGamepad()];
+  input.poll();
+
+  // Right Trigger (7) with analog value > 0.5
+  pads = [fakeGamepad({ buttons: { 7: 0.9 } })];
+  assert.equal(input.poll().hold, true);
+  assert.equal(input.poll().hold, false);
+});
+
+test('gamepad: Start / Options (Button 9) triggers Pause and Start as single-frame edges', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  pads = [fakeGamepad({ buttons: { 9: true } })];
+  const a = input.poll();
+  assert.equal(a.pause, true);
+  assert.equal(a.start, true);
+
+  const held = input.poll();
+  assert.equal(held.pause, false);
+  assert.equal(held.start, false);
+});
+
+test('gamepad: Button 0 (A) triggers Start as single-frame edge for title and game-over', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  pads = [fakeGamepad({ buttons: { 0: true } })];
+  const a = input.poll();
+  assert.equal(a.start, true);
+  assert.equal(a.rotate, 1);
+
+  const held = input.poll();
+  assert.equal(held.start, false);
+  assert.equal(held.rotate, 0);
+});
+
+test('gamepad: D-Pad Left/Right and Left Stick X adjust menuX on title screen', () => {
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  // D-Pad Left
+  pads = [fakeGamepad({ buttons: { 14: true } })];
+  assert.equal(input.poll().menuX, -1);
+  assert.equal(input.poll().menuX, 0, 'menuX is edge-based');
+
+  // D-Pad Right
+  pads = [fakeGamepad({ buttons: { 15: true } })];
+  assert.equal(input.poll().menuX, 1);
+  assert.equal(input.poll().menuX, 0);
+
+  // Left Stick Left (axes[0] = -0.8)
+  pads = [fakeGamepad({ axes: [-0.8, 0] })];
+  assert.equal(input.poll().menuX, -1);
+  assert.equal(input.poll().menuX, 0);
+
+  // Left Stick Right (axes[0] = 0.8)
+  pads = [fakeGamepad({ axes: [0.8, 0] })];
+  assert.equal(input.poll().menuX, 1);
+  assert.equal(input.poll().menuX, 0);
+});
+
+test('gamepad: multi-controller support and disconnected controller handling', () => {
+  // Controller in slot 1 works even if slot 0 is null
+  let pads = [null, fakeGamepad({ buttons: { 0: true } })];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+  assert.equal(input.poll().rotate, 1);
+
+  // Disconnected controller (connected = false) is ignored
+  pads = [fakeGamepad({ connected: false, buttons: { 0: true } })];
+  assert.equal(input.poll().rotate, 0);
+
+  // Two connected controllers combined: pad 0 holds Soft Drop, pad 1 presses Rotate CW
+  pads = [
+    fakeGamepad({ buttons: { 13: true } }),
+    fakeGamepad({ buttons: { 0: true } }),
+  ];
+  const both = input.poll();
+  assert.equal(both.softDrop, true);
+  assert.equal(both.rotate, 1);
+});
+
+test('gamepad: onGamepadButton callback fires on rising edge for audio unlock', () => {
+  let buttonPresses = 0;
+  let pads = [fakeGamepad()];
+  const input = createInput(recordingTarget(), undefined, undefined, {
+    getGamepads: () => pads,
+    onGamepadButton: () => { buttonPresses++; },
+  });
+
+  // No buttons pressed
+  input.poll();
+  assert.equal(buttonPresses, 0);
+
+  // Button 0 pressed
+  pads = [fakeGamepad({ buttons: { 0: true } })];
+  input.poll();
+  assert.equal(buttonPresses, 1);
+
+  // Button 0 still held
+  input.poll();
+  assert.equal(buttonPresses, 1);
+
+  // Released
+  pads = [fakeGamepad()];
+  input.poll();
+  assert.equal(buttonPresses, 1);
+
+  // Button 9 pressed
+  pads = [fakeGamepad({ buttons: { 9: true } })];
+  input.poll();
+  assert.equal(buttonPresses, 2);
+});
+
+test('gamepad: reset() clears all gamepad state and cancels held inputs', () => {
+  let pads = [fakeGamepad({ buttons: { 13: true, 14: true } })];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  input.poll(); // read held inputs
+  pads = [fakeGamepad()];
+  input.reset();
+
+  assert.deepEqual({ ...input.poll() }, emptyActions());
+});
+
+test('gamepad: zero allocations during polling with active controller inputs', () => {
+  let pads = [fakeGamepad({ axes: [-1, 0.6], buttons: { 0: true, 13: true } })];
+  const input = createInput(recordingTarget(), undefined, undefined, { getGamepads: () => pads });
+
+  const a1 = input.poll();
+  const a2 = input.poll();
+  assert.equal(a1, a2, 'poll() reuses the preallocated Actions instance');
+  pads = [fakeGamepad({ axes: [1, 0], buttons: { 1: true, 12: true } })];
+  const a3 = input.poll();
+  assert.equal(a2, a3, 'poll() continues reusing the preallocated Actions instance');
 });

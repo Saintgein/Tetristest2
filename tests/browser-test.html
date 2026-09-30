@@ -195,7 +195,24 @@
       poll = input.poll();
       check('touch on title screen triggers start', poll.start === true);
 
-      // 7. Console Cleanliness
+      // 7. Gamepad Connection Lifecycle & Dynamic Prompts
+      const dOverlaySub = dDoc.getElementById('overlay-sub');
+      check('desktop initial prompt is default', dOverlaySub.textContent.includes('CLICK TO START'));
+
+      dWin.dispatchEvent(new Event('gamepadconnected'));
+      await wait(50);
+      check('gamepad connected: has-gamepad class added', dDoc.documentElement.classList.contains('has-gamepad'));
+      check('gamepad connected: prompt includes controller cues (OR PRESS START)',
+        dOverlaySub.textContent.includes('OR PRESS START'),
+        `Text: ${dOverlaySub.textContent}`
+      );
+
+      dWin.dispatchEvent(new Event('gamepaddisconnected'));
+      await wait(50);
+      check('gamepad disconnected: has-gamepad class removed', !dDoc.documentElement.classList.contains('has-gamepad'));
+      check('gamepad disconnected: prompt reverts to default', dOverlaySub.textContent.includes('CLICK TO START'));
+
+      // 8. Console Cleanliness
       check('console has zero unhandled errors', errors.length === 0, errors.join(', '));
 
       // Display results in HTML

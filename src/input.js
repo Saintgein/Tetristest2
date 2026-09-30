@@ -67,6 +67,27 @@ export function stepDas(das, dir, fresh, dasFrames, arrFrames) {
   return (das.frames - dasFrames) % arrFrames === 0 ? dir : 0;
 }
 
+export const GP_AXIS_DEADZONE = 0.5;
+
+const GP_LEFT = 0;
+const GP_RIGHT = 1;
+const GP_SOFT_DROP = 2;
+const GP_HARD_DROP = 3;
+const GP_ROTATE_CW = 4;
+const GP_ROTATE_CCW = 5;
+const GP_HOLD = 6;
+const GP_PAUSE = 7;
+const GP_START = 8;
+const GP_ACTION_COUNT = 9;
+
+function isGamepadButtonDown(btn) {
+  if (!btn) return false;
+  if (typeof btn === 'object') {
+    return btn.pressed === true || btn.value > 0.5;
+  }
+  return btn > 0.5;
+}
+
 /** Keys are handled in the capture phase and never passively, so nothing on the page can swallow them first. */
 const KEY_LISTENER_OPTIONS = { capture: true, passive: false };
 const POINTER_LISTENER_OPTIONS = { capture: true, passive: true };
@@ -76,17 +97,25 @@ const NON_START_TARGETS = 'button, a, input, select, textarea, [data-no-start]';
  * @param {EventTarget} target receives keydown / keyup / blur / pointerdown (window in the browser)
  * @param {Record<string, string[]>} bindings action → KeyboardEvent.code list
  * @param {{ dasFrames?: number, arrFrames?: number }} [timing]
- * @param {{ keyFallbacks?: Record<string, string>, pointerStart?: boolean, touchRoot?: Element|null }} [options]
+ * @param {{ keyFallbacks?: Record<string, string>, pointerStart?: boolean, touchRoot?: Element|null, getGamepads?: (() => (Gamepad|null)[])|null, onGamepadButton?: (() => void)|null }} [options]
  *        keyFallbacks: KeyboardEvent.key → action when the code is empty/unbound;
  *        pointerStart: a primary click/tap anywhere (except controls) presses Start;
- *        touchRoot: container element with [data-action] virtual buttons
+ *        touchRoot: container element with [data-action] virtual buttons;
+ *        getGamepads: accessor returning gamepads list (defaults to navigator.getGamepads);
+ *        onGamepadButton: callback fired on controller button press (used for audio unlock)
  * @returns {{ poll(): Actions, press(action: string): void, reset(): void, destroy(): void, bindTouch(element: Element): void }}
  */
 export function createInput(
   target = window,
   bindings = KEY_BINDINGS,
   { dasFrames = DAS_FRAMES, arrFrames = ARR_FRAMES } = {},
-  { keyFallbacks = KEY_FALLBACKS, pointerStart = true, touchRoot = null } = {},
+  {
+    keyFallbacks = KEY_FALLBACKS,
+    pointerStart = true,
+    touchRoot = null,
+    getGamepads = null,
+    onGamepadButton = null,
+  } = {},
 ) {
   // Everything below is preallocated: key handling and poll() never allocate
   // (Set add/delete/clear churn their backing tables in V8).
@@ -116,6 +145,24 @@ export function createInput(
     activePointerElements[i] = null;
   }
   const boundButtons = [];
+
+  // Preallocated Gamepad API tracking. Strictly zero allocations during polling.
+  const gamepadCurrent = new Uint8Array(GP_ACTION_COUNT);
+  const gamepadPrevious = new Uint8Array(GP_ACTION_COUNT);
+  let gamepadButtonWasDown = false;
+
+  const queryGamepads = typeof getGamepads === 'function'
+    ? getGamepads
+    : () => {
+        try {
+          return typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function'
+            ? navigator.getGamepads()
+            : null;
+        } catch {
+          return null;
+        }
+      };
+
   // key → { action, id }: the id stands in for the missing code in codeDown
   const fallbackByKey = new Map();
   for (const [key, action] of Object.entries(keyFallbacks)) {
@@ -211,6 +258,9 @@ export function createInput(
       activePointerActions[i] = '';
       activePointerElements[i] = null;
     }
+    gamepadCurrent.fill(0);
+    gamepadPrevious.fill(0);
+    gamepadButtonWasDown = false;
     clearPressed();
     lastHorizontal = 0;
     das.dir = 0;
@@ -371,24 +421,126 @@ export function createInput(
   }
 
   function poll() {
-    const dir = resolveHorizontal(isActive('left'), isActive('right'));
-    const fresh = dir !== 0 && isPressed(dir < 0 ? 'left' : 'right');
+    gamepadCurrent.fill(0);
+    let anyGamepadButtonDown = false;
+
+    let gamepads = null;
+    try {
+      gamepads = queryGamepads ? queryGamepads() : null;
+    } catch {
+      gamepads = null;
+    }
+
+    if (gamepads) {
+      const gpCount = gamepads.length;
+      for (let i = 0; i < gpCount; i++) {
+        const gp = gamepads[i];
+        if (!gp || gp.connected === false) continue;
+
+        const btns = gp.buttons;
+        const axes = gp.axes;
+
+        if (btns) {
+          const bLen = btns.length;
+          for (let b = 0; b < bLen; b++) {
+            if (isGamepadButtonDown(btns[b])) {
+              anyGamepadButtonDown = true;
+              break;
+            }
+          }
+        }
+
+        const axisX = axes && axes.length > 0 ? axes[0] : 0;
+        const axisY = axes && axes.length > 1 ? axes[1] : 0;
+
+        if (axisX <= -GP_AXIS_DEADZONE) gamepadCurrent[GP_LEFT] = 1;
+        else if (axisX >= GP_AXIS_DEADZONE) gamepadCurrent[GP_RIGHT] = 1;
+
+        if (axisY >= GP_AXIS_DEADZONE) gamepadCurrent[GP_SOFT_DROP] = 1;
+
+        if (btns) {
+          if (isGamepadButtonDown(btns[14])) gamepadCurrent[GP_LEFT] = 1;
+          if (isGamepadButtonDown(btns[15])) gamepadCurrent[GP_RIGHT] = 1;
+          if (isGamepadButtonDown(btns[13])) gamepadCurrent[GP_SOFT_DROP] = 1;
+          if (isGamepadButtonDown(btns[12])) gamepadCurrent[GP_HARD_DROP] = 1;
+
+          if (isGamepadButtonDown(btns[0]) || isGamepadButtonDown(btns[3])) {
+            gamepadCurrent[GP_ROTATE_CW] = 1;
+          }
+          if (isGamepadButtonDown(btns[1]) || isGamepadButtonDown(btns[2])) {
+            gamepadCurrent[GP_ROTATE_CCW] = 1;
+          }
+
+          if (
+            isGamepadButtonDown(btns[4]) ||
+            isGamepadButtonDown(btns[5]) ||
+            isGamepadButtonDown(btns[6]) ||
+            isGamepadButtonDown(btns[7])
+          ) {
+            gamepadCurrent[GP_HOLD] = 1;
+          }
+
+          if (isGamepadButtonDown(btns[9])) {
+            gamepadCurrent[GP_PAUSE] = 1;
+          }
+
+          if (isGamepadButtonDown(btns[0]) || isGamepadButtonDown(btns[9])) {
+            gamepadCurrent[GP_START] = 1;
+          }
+        }
+      }
+    }
+
+    if (anyGamepadButtonDown && !gamepadButtonWasDown) {
+      if (typeof onGamepadButton === 'function') {
+        onGamepadButton();
+      }
+    }
+    gamepadButtonWasDown = anyGamepadButtonDown;
+
+    const gpLeftPressed = gamepadCurrent[GP_LEFT] === 1 && gamepadPrevious[GP_LEFT] === 0;
+    const gpRightPressed = gamepadCurrent[GP_RIGHT] === 1 && gamepadPrevious[GP_RIGHT] === 0;
+
+    if (gpLeftPressed) lastHorizontal = -1;
+    else if (gpRightPressed) lastHorizontal = 1;
+
+    const leftActive = isActive('left') || gamepadCurrent[GP_LEFT] === 1;
+    const rightActive = isActive('right') || gamepadCurrent[GP_RIGHT] === 1;
+    const dir = resolveHorizontal(leftActive, rightActive);
+
+    const leftFresh = isPressed('left') || gpLeftPressed;
+    const rightFresh = isPressed('right') || gpRightPressed;
+    const fresh = dir !== 0 && (dir < 0 ? leftFresh : rightFresh);
+
     const shift = stepDas(das, dir, fresh, dasFrames, arrFrames);
+
+    const gpHardDropPressed = gamepadCurrent[GP_HARD_DROP] === 1 && gamepadPrevious[GP_HARD_DROP] === 0;
+    const gpRotateCWPressed = gamepadCurrent[GP_ROTATE_CW] === 1 && gamepadPrevious[GP_ROTATE_CW] === 0;
+    const gpRotateCCWPressed = gamepadCurrent[GP_ROTATE_CCW] === 1 && gamepadPrevious[GP_ROTATE_CCW] === 0;
+    const gpHoldPressed = gamepadCurrent[GP_HOLD] === 1 && gamepadPrevious[GP_HOLD] === 0;
+    const gpPausePressed = gamepadCurrent[GP_PAUSE] === 1 && gamepadPrevious[GP_PAUSE] === 0;
+    const gpStartPressed = gamepadCurrent[GP_START] === 1 && gamepadPrevious[GP_START] === 0;
 
     // One Actions object, overwritten every poll (no per-frame allocation).
     // Callers must read it before the next poll; copy it to keep a snapshot.
     actions.shift = shift;
     actions.shiftToWall = arrFrames === 0 && shift !== 0 && das.frames >= dasFrames;
-    actions.softDrop = isActive('softDrop');
-    actions.hardDrop = isPressed('hardDrop');
-    actions.rotate = isPressed('rotateCW') ? 1 : isPressed('rotateCCW') ? -1 : 0;
-    actions.hold = isPressed('hold');
-    actions.pause = isPressed('pause');
-    actions.start = isPressed('start');
+    actions.softDrop = isActive('softDrop') || gamepadCurrent[GP_SOFT_DROP] === 1;
+    actions.hardDrop = isPressed('hardDrop') || gpHardDropPressed;
+
+    const cw = isPressed('rotateCW') || gpRotateCWPressed;
+    const ccw = isPressed('rotateCCW') || gpRotateCCWPressed;
+    actions.rotate = cw ? 1 : ccw ? -1 : 0;
+
+    actions.hold = isPressed('hold') || gpHoldPressed;
+    actions.pause = isPressed('pause') || gpPausePressed;
+    actions.start = isPressed('start') || gpStartPressed;
     actions.mute = isPressed('mute');
     actions.music = isPressed('music');
-    actions.menuX = resolveHorizontal(isPressed('left'), isPressed('right'));
+    actions.menuX = resolveHorizontal(isPressed('left') || gpLeftPressed, isPressed('right') || gpRightPressed);
+
     if (anyPressed) clearPressed();
+    gamepadPrevious.set(gamepadCurrent);
     return actions;
   }
 
